@@ -28,7 +28,7 @@ def _certifi_ssl(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
 ssl.create_default_context = _certifi_ssl
 
 from livekit import agents, api, rtc
-from livekit.agents import AgentSession, RoomInputOptions
+from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import noise_cancellation, silero
 
 from db import init_db, log_error, get_enabled_tools, get_agent_profile
@@ -140,7 +140,7 @@ def _build_session(
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
 
-        return AgentSession(llm=RealtimeClass(**realtime_kwargs), tools=tools)
+        return AgentSession(llm=RealtimeClass(**realtime_kwargs))
 
     if _google_llm is None:
         raise RuntimeError(
@@ -152,7 +152,7 @@ def _build_session(
     stt = _deepgram_stt(model="nova-3", language="multi") if _deepgram_stt else None
     tts = _google_tts() if _google_tts else None
     vad = silero.VAD.load()
-    return AgentSession(stt=stt, llm=_google_llm(model=gemini_model), tts=tts, vad=vad, tools=tools)
+    return AgentSession(stt=stt, llm=_google_llm(model=gemini_model), tts=tts, vad=vad)
 
 
 # ── Main entrypoint ───────────────────────────────────────────────────────────
@@ -224,7 +224,10 @@ async def entrypoint(ctx: agents.JobContext):
     # ── Build and start session ───────────────────────────────────────────────
     session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
 
+    agent = Agent(instructions=system_prompt, tools=tool_list)
+
     await session.start(
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVCTelephony(),
