@@ -83,7 +83,7 @@ async def _dispatch_call(phone: str, lead_name: str, meta: dict) -> bool:
             await lk.room.create_room(
                 lk_api.CreateRoomRequest(name=room_name, metadata=room_meta)
             )
-            await lk.agent.create_agent_dispatch(
+            await lk.agent_dispatch.create_dispatch(
                 lk_api.CreateAgentDispatchRequest(
                     agent_name="outbound-caller",
                     room=room_name,
