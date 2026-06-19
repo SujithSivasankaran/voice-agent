@@ -221,7 +221,8 @@ class AppointmentTools(llm.ToolContext):
             response = await loop.run_in_executor(
                 None,
                 lambda: client.models.generate_content(
-                    model="gemini-2.0-flash-lite", contents=prompt
+                    model=os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash-lite"),
+                    contents=prompt,
                 ),
             )
             if response.text and response.text.strip():
