@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OutboundAI Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #22263a;
+    --border: #2e3248; --accent: #6c63ff; --accent2: #00d4aa;
+    --danger: #ff4d6d; --warn: #ffa94d; --text: #e2e8f0;
+    --muted: #8892a4; --success: #00d4aa;
+    --radius: 10px; --font: 'Inter', system-ui, sans-serif;
+  }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+  /* Layout */
+  #app { display: flex; height: 100vh; overflow: hidden; }
+  nav { width: 220px; min-width: 220px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 0; }
+  nav .logo { padding: 24px 20px 20px; font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+  nav .logo span { color: var(--accent2); }
+  nav ul { list-style: none; flex: 1; padding: 0 10px; }
+  nav li a { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; transition: all .15s; font-size: 13px; }
+  nav li a:hover, nav li a.active { background: var(--card); color: var(--text); }
+  nav li a.active { color: var(--accent); }
+  nav li a .ico { width: 18px; text-align: center; }
+  nav .version { padding: 16px 20px; color: var(--muted); font-size: 11px; }
+
+  main { flex: 1; overflow-y: auto; padding: 28px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Typography */
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+  /* Cards */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+  .card h2 { margin-bottom: 14px; }
+
+  /* Stat tiles */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .stat-tile { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .stat-tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .stat-tile .value { font-size: 28px; font-weight: 700; }
+  .stat-tile .value.green { color: var(--success); }
+  .stat-tile .value.purple { color: var(--accent); }
+  .stat-tile .value.orange { color: var(--warn); }
+
+  /* Forms */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-grid.full { grid-template-columns: 1fr; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  input, select, textarea { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 9px 12px; font-size: 13px; width: 100%; outline: none; transition: border-color .15s; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 100px; font-family: var(--font); }
+  select option { background: var(--card); }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all .15s; text-decoration: none; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #5a51e8; }
+  .btn-success { background: var(--success); color: #000; }
+  .btn-success:hover { background: #00b894; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: #e6003c; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 14px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  /* Badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .badge-booked { background: rgba(0,212,170,.15); color: var(--success); }
+  .badge-not_interested { background: rgba(255,77,109,.15); color: var(--danger); }
+  .badge-voicemail { background: rgba(255,169,77,.15); color: var(--warn); }
+  .badge-no_answer { background: rgba(136,146,164,.15); color: var(--muted); }
+  .badge-callback_requested { background: rgba(108,99,255,.15); color: var(--accent); }
+  .badge-wrong_number { background: rgba(255,77,109,.1); color: #ff8fa3; }
+  .badge-active { background: rgba(0,212,170,.15); color: var(--success); }
+  .badge-paused { background: rgba(255,169,77,.15); color: var(--warn); }
+  .badge-completed { background: rgba(136,146,164,.15); color: var(--muted); }
+  .badge-cancelled { background: rgba(255,77,109,.15); color: var(--danger); }
+
+  /* Charts */
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .chart-card h2 { margin-bottom: 14px; font-size: 14px; }
+  .chart-card canvas { max-height: 220px; }
+
+  /* Toast */
+  #toast { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+  .toast-msg { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px; font-size: 13px; animation: slideIn .2s ease; box-shadow: 0 4px 20px rgba(0,0,0,.5); min-width: 220px; }
+  .toast-msg.ok { border-left: 3px solid var(--success); }
+  .toast-msg.err { border-left: 3px solid var(--danger); }
+  @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  /* Log entries */
+  .log-entry { font-family: 'Courier New', monospace; font-size: 12px; padding: 5px 10px; border-radius: 4px; margin-bottom: 3px; }
+  .log-info { background: rgba(108,99,255,.08); color: #a5b4fc; }
+  .log-error { background: rgba(255,77,109,.08); color: #fda4af; }
+  .log-warning { background: rgba(255,169,77,.08); color: #fcd34d; }
+  #log-container { max-height: 420px; overflow-y: auto; padding: 8px; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); }
+
+  /* Prompt editor */
+  #prompt-editor { width: 100%; min-height: 400px; font-family: 'Courier New', monospace; font-size: 13px; }
+
+  /* File drop zone */
+  .drop-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px; text-align: center; color: var(--muted); cursor: pointer; transition: all .15s; }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); color: var(--text); background: rgba(108,99,255,.05); }
+
+  /* Settings sections */
+  .settings-section { margin-bottom: 28px; }
+  .settings-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .setting-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { width: 220px; flex-shrink: 0; }
+  .setting-label .key { font-size: 12px; font-weight: 600; color: var(--text); }
+  .setting-label .desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .setting-input { flex: 1; }
+  .configured-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .configured-dot.yes { background: var(--success); }
+  .configured-dot.no { background: var(--border); }
+
+  /* Pagination */
+  .pagination { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .page-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .page-btn:hover { border-color: var(--accent); }
+  .page-btn:disabled { opacity: .4; cursor: default; }
+  .page-info { color: var(--muted); font-size: 12px; }
+
+  /* Profile cards */
+  .profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .profile-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; position: relative; }
+  .profile-card.default-profile { border-color: var(--accent); }
+  .profile-card .profile-name { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+  .profile-card .profile-meta { color: var(--muted); font-size: 12px; line-height: 1.7; }
+  .profile-card .profile-actions { margin-top: 14px; display: flex; gap: 8px; }
+  .default-badge { position: absolute; top: 12px; right: 12px; font-size: 10px; font-weight: 700; background: var(--accent); color: #fff; padding: 2px 7px; border-radius: 99px; }
+
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 1000; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; width: 540px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
+  .modal h2 { margin-bottom: 20px; }
+  .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Search */
+  .search-bar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+  .search-bar input { flex: 1; max-width: 300px; }
+
+  /* No data */
+  .empty-state { text-align: center; padding: 48px; color: var(--muted); }
+  .empty-state .ico { font-size: 36px; margin-bottom: 12px; }
+
+  /* Tool checkboxes */
+  .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .tool-check input[type=checkbox] { width: auto; accent-color: var(--accent); }
+
+  @media (max-width: 900px) {
+    nav { display: none; }
+    .form-grid { grid-template-columns: 1fr; }
+    .charts-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ── Sidebar nav ── -->
+<nav>
+  <div class="logo">Outbound<span>AI</span></div>
+  <ul>
+    <li><a href="#" class="active" data-page="dashboard"><span class="ico">📊</span> Dashboard</a></li>
+    <li><a href="#" data-page="single-call"><span class="ico">📞</span> Single Call</a></li>
+    <li><a href="#" data-page="batch-call"><span class="ico">📋</span> Batch CSV</a></li>
+    <li><a href="#" data-page="campaigns"><span class="ico">🚀</span> Campaigns</a></li>
+    <li><a href="#" data-page="appointments"><span class="ico">📅</span> Appointments</a></li>
+    <li><a href="#" data-page="call-logs"><span class="ico">🗒️</span> Call Logs</a></li>
+    <li><a href="#" data-page="crm"><span class="ico">👥</span> CRM</a></li>
+    <li><a href="#" data-page="agent-profiles"><span class="ico">🤖</span> Agent Profiles</a></li>
+    <li><a href="#" data-page="prompt-editor"><span class="ico">✏️</span> Prompt Editor</a></li>
+    <li><a href="#" data-page="settings"><span class="ico">⚙️</span> Settings</a></li>
+    <li><a href="#" data-page="live-logs"><span class="ico">📡</span> Live Logs</a></li>
+  </ul>
+  <div class="version">OutboundAI v1.0</div>
+</nav>
+
+<!-- ── Main ── -->
+<main>
+
+<!-- DASHBOARD -->
+<div class="page active" id="page-dashboard">
+  <h1>Dashboard</h1>
+  <p class="subtitle">Real-time overview of calling activity</p>
+  <div class="stats-grid" id="stats-tiles">
+    <div class="stat-tile"><div class="label">Total Calls</div><div class="value purple" id="st-total">—</div></div>
+    <div class="stat-tile"><div class="label">Booked</div><div class="value green" id="st-booked">—</div></div>
+    <div class="stat-tile"><div class="label">Booking Rate</div><div class="value green" id="st-rate">—</div></div>
+    <div class="stat-tile"><div class="label">Not Interested</div><div class="value orange" id="st-ni">—</div></div>
+    <div class="stat-tile"><div class="label">Avg Duration</div><div class="value" id="st-dur">—</div></div>
+  </div>
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h2>Calls per Day (14d)</h2>
+      <canvas id="chart-timeline"></canvas>
+    </div>
+    <div class="chart-card">
+      <h2>Outcomes Breakdown</h2>
+      <canvas id="chart-outcomes"></canvas>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Recent Calls</h2>
+    <div class="table-wrap">
+      <table id="tbl-recent">
+        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SINGLE CALL -->
+<div class="page" id="page-single-call">
+  <h1>Single Call</h1>
+  <p class="subtitle">Dispatch the AI agent to call one number immediately</p>
+  <div class="card">
+    <div class="form-grid">
+      <div class="form-group"><label>Phone Number *</label><input id="sc-phone" placeholder="+919876543210" /></div>
+      <div class="form-group"><label>Lead Name</label><input id="sc-name" placeholder="Rahul Sharma" /></div>
+      <div class="form-group"><label>Business Name</label><input id="sc-business" placeholder="Harry's Fitcamp" /></div>
+      <div class="form-group"><label>Service Type</label><input id="sc-service" placeholder="trial assessment session" /></div>
+      <div class="form-group"><label>Agent Profile</label>
+        <select id="sc-profile"><option value="">— Default —</option></select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Custom System Prompt (leave blank to use profile/default)</label>
+      <textarea id="sc-prompt" placeholder="Optional: override the AI instructions for this call..."></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="dispatchSingleCall()">📞 Call Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- BATCH CSV -->
+<div class="page" id="page-batch-call">
+  <h1>Batch CSV Call</h1>
+  <p class="subtitle">Upload a CSV to call multiple numbers. Required columns: <code>phone</code>, <code>name</code>. Optional: <code>service</code>, <code>business</code></p>
+  <div class="card">
+    <div class="drop-zone" id="batch-drop" onclick="document.getElementById('batch-file').click()">
+      <div style="font-size:28px;margin-bottom:8px">📂</div>
+      <div>Drop CSV here or click to browse</div>
+      <div style="font-size:11px;margin-top:6px;color:var(--muted)">phone, name [, service, business]</div>
+      <input type="file" id="batch-file" accept=".csv" style="display:none" onchange="onBatchFileSelect(this)" />
+    </div>
+    <div id="batch-file-name" style="margin-top:10px;color:var(--muted);font-size:12px"></div>
+    <div class="form-grid" style="margin-top:18px">
+      <div class="form-group"><label>Business Name</label><input id="bk-business" placeholder="Harry's Fitcamp" /></div>
+      <div class="form-group"><label>Service Type</label><input id="bk-service" placeholder="trial assessment session" /></div>
+      <div class="form-group"><label>Delay Between Calls (sec)</label><input id="bk-delay" type="number" value="3" min="0" /></div>
+      <div class="form-group"><label>Agent Profile</label>
+        <select id="bk-profile"><option value="">— Default —</option></select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="dispatchBatch()">🚀 Start Batch</button>
+    </div>
+    <div id="batch-results" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<!-- CAMPAIGNS -->
+<div class="page" id="page-campaigns">
+  <h1>Campaigns</h1>
+  <p class="subtitle">Schedule recurring or one-time bulk calling campaigns</p>
+  <div style="margin-bottom:16px">
+    <button class="btn btn-primary" onclick="openNewCampaignModal()">+ New Campaign</button>
+  </div>
+  <div id="campaigns-list"></div>
+</div>
+
+<!-- APPOINTMENTS -->
+<div class="page" id="page-appointments">
+  <h1>Appointments</h1>
+  <p class="subtitle">All booked appointments</p>
+  <div class="search-bar">
+    <input id="appt-date-filter" type="date" style="width:180px" onchange="loadAppointments()" />
+    <button class="btn btn-outline btn-sm" onclick="document.getElementById('appt-date-filter').value=''; loadAppointments()">Clear</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddApptModal()">+ Add Manual</button>
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Time</th><th>Name</th><th>Phone</th><th>Service</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="appt-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- CALL LOGS -->
+<div class="page" id="page-call-logs">
+  <h1>Call Logs</h1>
+  <p class="subtitle">Every call dispatched through OutboundAI</p>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Recording</th></tr></thead>
+        <tbody id="calls-body"></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <button class="page-btn" id="calls-prev" onclick="loadCalls(callsPage-1)">← Prev</button>
+      <span class="page-info" id="calls-page-info">Page 1</span>
+      <button class="page-btn" id="calls-next" onclick="loadCalls(callsPage+1)">Next →</button>
+    </div>
+  </div>
+</div>
+
+<!-- CRM -->
+<div class="page" id="page-crm">
+  <h1>CRM</h1>
+  <p class="subtitle">All contacts aggregated from call activity</p>
+  <div class="search-bar">
+    <input id="crm-search" placeholder="Search by name or phone…" oninput="filterCRM()" style="max-width:300px" />
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Phone</th><th>Total Calls</th><th>Booked</th><th>Last Call</th><th>Last Outcome</th><th>Actions</th></tr></thead>
+        <tbody id="crm-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- AGENT PROFILES -->
+<div class="page" id="page-agent-profiles">
+  <h1>Agent Profiles</h1>
+  <p class="subtitle">Named AI configurations — different voice, model, prompt, and tools per campaign</p>
+  <div style="margin-bottom:16px">
+    <button class="btn btn-primary" onclick="openNewProfileModal()">+ New Profile</button>
+  </div>
+  <div class="profile-grid" id="profiles-grid"></div>
+</div>
+
+<!-- PROMPT EDITOR -->
+<div class="page" id="page-prompt-editor">
+  <h1>Prompt Editor</h1>
+  <p class="subtitle">Edit the global default system prompt. Changes apply to new calls using the default profile.</p>
+  <div class="card">
+    <div class="form-group">
+      <label>System Prompt</label>
+      <textarea id="prompt-editor" rows="24"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="savePrompt()">💾 Save Prompt</button>
+      <button class="btn btn-outline" onclick="resetPrompt()">↩ Reset to Default</button>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div class="page" id="page-settings">
+  <h1>Settings</h1>
+  <p class="subtitle">Current configuration — read directly from VPS environment variables</p>
+  <div style="background:rgba(108,99,255,.1);border:1px solid var(--accent);border-radius:var(--radius);padding:14px 18px;margin-bottom:20px;font-size:13px;line-height:1.7">
+    <strong>Single source of truth: Coolify → Environment variables.</strong><br>
+    To add or change a key, set it in Coolify and redeploy. Values shown here reflect what is currently active in the running process. Sensitive keys show only whether they are configured (value is never exposed in the UI).
+  </div>
+  <div id="settings-container"></div>
+</div>
+
+<!-- LIVE LOGS -->
+<div class="page" id="page-live-logs">
+  <h1>Live Logs</h1>
+  <p class="subtitle">Real-time agent and server events</p>
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    <select id="log-level-filter" onchange="loadLogs()">
+      <option value="">All Levels</option>
+      <option value="info">Info</option>
+      <option value="warning">Warning</option>
+      <option value="error">Error</option>
+    </select>
+    <select id="log-source-filter" onchange="loadLogs()">
+      <option value="">All Sources</option>
+      <option value="agent">Agent</option>
+      <option value="server">Server</option>
+    </select>
+    <button class="btn btn-outline btn-sm" onclick="loadLogs()">↻ Refresh</button>
+    <button class="btn btn-danger btn-sm" onclick="clearLogs()">🗑 Clear</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+      <input type="checkbox" id="log-auto-refresh" checked style="width:auto;accent-color:var(--accent)" /> Auto-refresh (5s)
+    </label>
+  </div>
+  <div id="log-container"></div>
+</div>
+
+</main><!-- /main -->
+</div><!-- /app -->
+
+<!-- ── MODALS ── -->
+
+<!-- New Campaign Modal -->
+<div class="modal-overlay" id="modal-campaign">
+  <div class="modal">
+    <h2>New Campaign</h2>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1"><label>Campaign Name *</label><input id="cmp-name" placeholder="June Dental Campaign" /></div>
+      <div class="form-group"><label>Schedule</label>
+        <select id="cmp-schedule">
+          <option value="once">Run Once (immediately)</option>
+          <option value="daily">Daily</option>
+          <option value="weekdays">Weekdays (Mon–Fri)</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Time (for daily/weekdays)</label><input id="cmp-time" type="time" value="09:00" /></div>
+      <div class="form-group"><label>Delay Between Calls (sec)</label><input id="cmp-delay" type="number" value="3" min="0" /></div>
+      <div class="form-group"><label>Agent Profile</label>
+        <select id="cmp-profile"><option value="">— Default —</option></select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Upload Contacts CSV (phone, name [, service, business])</label>
+      <div class="drop-zone" style="padding:20px" onclick="document.getElementById('cmp-file').click()">
+        <div id="cmp-file-name">Click to select CSV</div>
+        <input type="file" id="cmp-file" accept=".csv" style="display:none" onchange="onCmpFileSelect(this)" />
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Custom System Prompt (optional)</label>
+      <textarea id="cmp-prompt" rows="4" placeholder="Leave blank to use default/profile prompt…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-campaign')">Cancel</button>
+      <button class="btn btn-primary" onclick="createCampaign()">Create Campaign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Appointment Modal -->
+<div class="modal-overlay" id="modal-appt">
+  <div class="modal">
+    <h2>Add Appointment</h2>
+    <div class="form-grid">
+      <div class="form-group"><label>Name *</label><input id="appt-name" /></div>
+      <div class="form-group"><label>Phone *</label><input id="appt-phone" placeholder="+919876543210" /></div>
+      <div class="form-group"><label>Date *</label><input id="appt-date" type="date" /></div>
+      <div class="form-group"><label>Time *</label><input id="appt-time" type="time" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Service *</label><input id="appt-service" placeholder="trial assessment session" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-appt')">Cancel</button>
+      <button class="btn btn-primary" onclick="createAppt()">Book Appointment</button>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Profile Modal -->
+<div class="modal-overlay" id="modal-profile">
+  <div class="modal">
+    <h2 id="profile-modal-title">New Agent Profile</h2>
+    <input type="hidden" id="profile-edit-id" />
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1"><label>Profile Name *</label><input id="pr-name" placeholder="Priya — Dental" /></div>
+      <div class="form-group"><label>Voice</label>
+        <select id="pr-voice">
+          <option value="Aoede">Aoede (F)</option>
+          <option value="Charon">Charon (M)</option>
+          <option value="Fenrir">Fenrir (M)</option>
+          <option value="Kore">Kore (F)</option>
+          <option value="Puck">Puck (M)</option>
+          <option value="Schedar">Schedar (F)</option>
+          <option value="Leda">Leda (F)</option>
+          <option value="Orus">Orus (M)</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Model</label>
+        <select id="pr-model">
+          <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
+          <option value="gemini-2.0-flash-live-001">gemini-2.0-flash-live-001</option>
+        </select>
+      </div>
+      <div class="form-group" style="grid-column:1/-1"><label>Set as Default</label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)">
+          <input type="checkbox" id="pr-default" style="width:auto;accent-color:var(--accent)" /> Make this the default agent profile
+        </label>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>System Prompt (leave blank to use global default)</label>
+      <textarea id="pr-prompt" rows="6" placeholder="Optional per-profile instructions…"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Enabled Tools (uncheck to disable)</label>
+      <div class="tools-grid" id="tools-checkboxes"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-profile')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
+    </div>
+  </div>
+</div>
+
+<!-- Contact History Modal -->
+<div class="modal-overlay" id="modal-contact">
+  <div class="modal" style="width:640px">
+    <h2 id="contact-modal-title">Contact History</h2>
+    <div id="contact-modal-body"></div>
+    <div class="form-group" style="margin-top:16px">
+      <label>Add Memory Note</label>
+      <div style="display:flex;gap:8px">
+        <input id="contact-new-memory" placeholder="e.g. Prefers morning calls" />
+        <button class="btn btn-primary btn-sm" onclick="addMemoryNote()">Add</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-contact')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── API Base ──────────────────────────────────────────────────────────────────
+const API = '';  // same origin
+
+async function api(path, opts={}) {
+  const r = await fetch(API + path, {
+    headers: {'Content-Type': 'application/json'},
+    ...opts,
+  });
+  if (!r.ok) {
+    const err = await r.text();
+    throw new Error(err || r.statusText);
+  }
+  return r.json();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, ok=true) {
+  const el = document.createElement('div');
+  el.className = 'toast-msg ' + (ok ? 'ok' : 'err');
+  el.textContent = msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+document.querySelectorAll('nav a[data-page]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const page = a.dataset.page;
+    document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.getElementById('page-' + page).classList.add('active');
+    onPageLoad(page);
+  });
+});
+
+function onPageLoad(page) {
+  if (page === 'dashboard')      { loadStats(); loadRecentCalls(); }
+  if (page === 'single-call')    { loadProfilesIntoSelect('sc-profile'); }
+  if (page === 'batch-call')     { loadProfilesIntoSelect('bk-profile'); }
+  if (page === 'campaigns')      { loadCampaigns(); }
+  if (page === 'appointments')   { loadAppointments(); }
+  if (page === 'call-logs')      { loadCalls(1); }
+  if (page === 'crm')            { loadCRM(); }
+  if (page === 'agent-profiles') { loadProfiles(); }
+  if (page === 'prompt-editor')  { loadPrompt(); }
+  if (page === 'settings')       { loadSettings(); }
+  if (page === 'live-logs')      { loadLogs(); }
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+let chartTimeline, chartOutcomes;
+
+function initCharts(timeline, outcomes) {
+  const tl = document.getElementById('chart-timeline');
+  const oc = document.getElementById('chart-outcomes');
+  if (chartTimeline) chartTimeline.destroy();
+  if (chartOutcomes) chartOutcomes.destroy();
+
+  const gridColor = 'rgba(255,255,255,.06)';
+  const labelColor = '#8892a4';
+
+  chartTimeline = new Chart(tl, {
+    type: 'bar',
+    data: {
+      labels: timeline.map(d => d.date.slice(5)),
+      datasets: [{ label: 'Calls', data: timeline.map(d => d.count), backgroundColor: 'rgba(108,99,255,.5)', borderColor: '#6c63ff', borderWidth: 1, borderRadius: 4 }],
+    },
+    options: { plugins: { legend: { display: false } }, scales: {
+      x: { ticks: { color: labelColor }, grid: { color: gridColor } },
+      y: { ticks: { color: labelColor }, grid: { color: gridColor }, beginAtZero: true },
+    }},
+  });
+
+  const colors = ['#6c63ff','#00d4aa','#ff4d6d','#ffa94d','#a5b4fc','#fdba74'];
+  chartOutcomes = new Chart(oc, {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(outcomes),
+      datasets: [{ data: Object.values(outcomes), backgroundColor: colors, borderWidth: 0 }],
+    },
+    options: { plugins: { legend: { labels: { color: '#e2e8f0', font: { size: 11 } } } }, cutout: '65%' },
+  });
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const s = await api('/stats');
+    document.getElementById('st-total').textContent = s.total_calls;
+    document.getElementById('st-booked').textContent = s.booked;
+    document.getElementById('st-rate').textContent = s.booking_rate_percent + '%';
+    document.getElementById('st-ni').textContent = s.not_interested;
+    document.getElementById('st-dur').textContent = fmtDur(s.avg_duration_seconds);
+    initCharts(s.timeline, s.outcomes || {});
+  } catch(e) { toast('Stats error: ' + e.message, false); }
+}
+
+async function loadRecentCalls() {
+  try {
+    const calls = await api('/calls?limit=5');
+    const tbody = document.querySelector('#tbl-recent tbody');
+    tbody.innerHTML = calls.slice(0,5).map(c => `
+      <tr>
+        <td>${fmtTime(c.timestamp)}</td>
+        <td>${c.lead_name || '—'}</td>
+        <td>${c.phone_number}</td>
+        <td><span class="badge badge-${c.outcome}">${c.outcome}</span></td>
+        <td>${fmtDur(c.duration_seconds)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="empty-state">No calls yet</td></tr>';
+  } catch(e) {}
+}
+
+// ── Single Call ───────────────────────────────────────────────────────────────
+async function dispatchSingleCall() {
+  const phone = document.getElementById('sc-phone').value.trim();
+  if (!phone) { toast('Phone number is required', false); return; }
+  try {
+    await api('/call/single', {
+      method: 'POST',
+      body: JSON.stringify({
+        phone_number: phone,
+        lead_name: document.getElementById('sc-name').value.trim() || 'there',
+        business_name: document.getElementById('sc-business').value.trim() || "Harry's Fitcamp",
+        service_type: document.getElementById('sc-service').value.trim() || 'trial assessment session',
+        system_prompt: document.getElementById('sc-prompt').value.trim(),
+        agent_profile_id: document.getElementById('sc-profile').value,
+      }),
+    });
+    toast('Call dispatched to ' + phone);
+  } catch(e) { toast('Dispatch failed: ' + e.message, false); }
+}
+
+// ── Batch CSV ─────────────────────────────────────────────────────────────────
+let batchFile = null;
+function onBatchFileSelect(input) {
+  batchFile = input.files[0];
+  document.getElementById('batch-file-name').textContent = batchFile ? '✔ ' + batchFile.name : '';
+}
+
+async function dispatchBatch() {
+  if (!batchFile) { toast('Select a CSV file first', false); return; }
+  const fd = new FormData();
+  fd.append('file', batchFile);
+  fd.append('business_name', document.getElementById('bk-business').value || "Harry's Fitcamp");
+  fd.append('service_type', document.getElementById('bk-service').value || 'trial assessment session');
+  fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
+  fd.append('agent_profile_id', document.getElementById('bk-profile').value || '');
+  try {
+    const r = await fetch('/call/batch', { method: 'POST', body: fd });
+    const data = await r.json();
+    document.getElementById('batch-results').innerHTML = `
+      <div class="card" style="margin-top:0">
+        <p>Dispatched: <strong>${data.dispatched}</strong> &nbsp; Failed: <strong>${data.failed}</strong></p>
+      </div>`;
+    toast(`Batch done — ${data.dispatched} dispatched, ${data.failed} failed`);
+  } catch(e) { toast('Batch error: ' + e.message, false); }
+}
+
+// Drag-over highlight
+const dz = document.getElementById('batch-drop');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag-over');
+  batchFile = e.dataTransfer.files[0];
+  document.getElementById('batch-file-name').textContent = '✔ ' + batchFile.name;
+});
+
+// ── Campaigns ─────────────────────────────────────────────────────────────────
+let cmpFile = null;
+function onCmpFileSelect(input) {
+  cmpFile = input.files[0];
+  document.getElementById('cmp-file-name').textContent = cmpFile ? '✔ ' + cmpFile.name : 'Click to select CSV';
+}
+
+function openNewCampaignModal() {
+  cmpFile = null;
+  document.getElementById('cmp-file-name').textContent = 'Click to select CSV';
+  document.getElementById('cmp-name').value = '';
+  document.getElementById('cmp-prompt').value = '';
+  document.getElementById('cmp-schedule').value = 'once';
+  document.getElementById('cmp-time').value = '09:00';
+  document.getElementById('cmp-delay').value = '3';
+  loadProfilesIntoSelect('cmp-profile');
+  openModal('modal-campaign');
+}
+
+async function createCampaign() {
+  const name = document.getElementById('cmp-name').value.trim();
+  if (!name) { toast('Campaign name is required', false); return; }
+  if (!cmpFile) { toast('Upload a CSV with contacts', false); return; }
+
+  const fd = new FormData();
+  fd.append('file', cmpFile);
+  fd.append('name', name);
+  fd.append('schedule_type', document.getElementById('cmp-schedule').value);
+  fd.append('schedule_time', document.getElementById('cmp-time').value);
+  fd.append('call_delay_seconds', document.getElementById('cmp-delay').value);
+  fd.append('system_prompt', document.getElementById('cmp-prompt').value.trim());
+  fd.append('agent_profile_id', document.getElementById('cmp-profile').value || '');
+
+  try {
+    const r = await fetch('/campaigns/upload', { method: 'POST', body: fd });
+    const data = await r.json();
+    toast(`Campaign created — ${data.contacts_loaded} contacts loaded`);
+    closeModal('modal-campaign');
+    loadCampaigns();
+  } catch(e) { toast('Create failed: ' + e.message, false); }
+}
+
+async function loadCampaigns() {
+  try {
+    const camps = await api('/campaigns');
+    const el = document.getElementById('campaigns-list');
+    if (!camps.length) {
+      el.innerHTML = '<div class="empty-state"><div class="ico">🚀</div><div>No campaigns yet — create one above</div></div>';
+      return;
+    }
+    el.innerHTML = camps.map(c => {
+      const contacts = (() => { try { return JSON.parse(c.contacts_json || '[]').length; } catch { return '?'; } })();
+      return `<div class="card" style="padding:18px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div>
+            <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name}</div>
+            <div style="color:var(--muted);font-size:12px;line-height:1.8">
+              ${contacts} contacts &nbsp;·&nbsp; ${c.schedule_type} ${c.schedule_time ? '@ '+c.schedule_time : ''}<br>
+              Dispatched: ${c.total_dispatched||0} &nbsp; Failed: ${c.total_failed||0}
+              ${c.last_run_at ? ' &nbsp;·&nbsp; Last run: '+fmtTime(c.last_run_at) : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="badge badge-${c.status}">${c.status}</span>
+            <button class="btn btn-success btn-sm" onclick="runCampaignNow('${c.id}')">▶ Run Now</button>
+            ${c.status==='active' ? `<button class="btn btn-outline btn-sm" onclick="setCampaignStatus('${c.id}','paused')">⏸ Pause</button>` : `<button class="btn btn-outline btn-sm" onclick="setCampaignStatus('${c.id}','active')">▶ Resume</button>`}
+            <button class="btn btn-danger btn-sm" onclick="deleteCampaign('${c.id}')">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { toast('Load campaigns error: ' + e.message, false); }
+}
+
+async function runCampaignNow(id) {
+  try { await api(`/campaigns/${id}/run`, {method:'POST'}); toast('Campaign running now'); loadCampaigns(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function setCampaignStatus(id, status) {
+  try { await api(`/campaigns/${id}/status`, {method:'PATCH', body:JSON.stringify({status})}); loadCampaigns(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function deleteCampaign(id) {
+  if (!confirm('Delete this campaign?')) return;
+  try { await api(`/campaigns/${id}`, {method:'DELETE'}); toast('Campaign deleted'); loadCampaigns(); }
+  catch(e) { toast(e.message, false); }
+}
+
+// ── Appointments ──────────────────────────────────────────────────────────────
+async function loadAppointments() {
+  const date = document.getElementById('appt-date-filter').value;
+  try {
+    const appts = await api('/appointments' + (date ? '?date=' + date : ''));
+    const tbody = document.getElementById('appt-body');
+    tbody.innerHTML = appts.map(a => `
+      <tr>
+        <td>${a.date}</td><td>${a.time}</td><td>${a.name}</td><td>${a.phone}</td>
+        <td>${a.service}</td>
+        <td><span class="badge badge-${a.status}">${a.status}</span></td>
+        <td>${a.status==='booked' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppt('${a.id}')">Cancel</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="empty-state">No appointments</td></tr>';
+  } catch(e) { toast(e.message, false); }
+}
+
+function openAddApptModal() { openModal('modal-appt'); }
+
+async function createAppt() {
+  const body = {
+    name: document.getElementById('appt-name').value.trim(),
+    phone: document.getElementById('appt-phone').value.trim(),
+    date: document.getElementById('appt-date').value,
+    time: document.getElementById('appt-time').value,
+    service: document.getElementById('appt-service').value.trim(),
+  };
+  if (!body.name || !body.phone || !body.date || !body.time || !body.service) {
+    toast('All fields are required', false); return;
+  }
+  try {
+    const r = await api('/appointments', {method:'POST', body:JSON.stringify(body)});
+    toast('Appointment booked — ID: ' + r.booking_id);
+    closeModal('modal-appt');
+    loadAppointments();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function cancelAppt(id) {
+  if (!confirm('Cancel this appointment?')) return;
+  try { await api(`/appointments/${id}`, {method:'DELETE'}); toast('Cancelled'); loadAppointments(); }
+  catch(e) { toast(e.message, false); }
+}
+
+// ── Call Logs ─────────────────────────────────────────────────────────────────
+let callsPage = 1;
+
+async function loadCalls(page=1) {
+  callsPage = page;
+  try {
+    const calls = await api(`/calls?page=${page}&limit=20`);
+    const tbody = document.getElementById('calls-body');
+    tbody.innerHTML = calls.map(c => `
+      <tr>
+        <td>${fmtTime(c.timestamp)}</td>
+        <td>${c.lead_name||'—'}</td>
+        <td>${c.phone_number}</td>
+        <td><span class="badge badge-${c.outcome}">${c.outcome||'—'}</span></td>
+        <td>${fmtDur(c.duration_seconds)}</td>
+        <td>
+          <input style="width:180px;font-size:12px;padding:4px 8px" value="${c.notes||''}" onblur="patchNotes('${c.id}',this.value)" placeholder="Add note…" />
+        </td>
+        <td>${c.recording_url ? `<a href="${c.recording_url}" target="_blank" style="color:var(--accent)">▶ Play</a>` : '—'}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="empty-state">No calls yet</td></tr>';
+    document.getElementById('calls-page-info').textContent = 'Page ' + page;
+    document.getElementById('calls-prev').disabled = page <= 1;
+    document.getElementById('calls-next').disabled = calls.length < 20;
+  } catch(e) { toast(e.message, false); }
+}
+
+async function patchNotes(id, notes) {
+  try { await api(`/calls/${id}/notes`, {method:'PATCH', body:JSON.stringify({notes})}); }
+  catch(e) {}
+}
+
+// ── CRM ───────────────────────────────────────────────────────────────────────
+let crmData = [];
+
+async function loadCRM() {
+  try {
+    crmData = await api('/contacts');
+    renderCRM(crmData);
+  } catch(e) { toast(e.message, false); }
+}
+
+function filterCRM() {
+  const q = document.getElementById('crm-search').value.toLowerCase();
+  renderCRM(crmData.filter(c =>
+    (c.phone_number||'').includes(q) || (c.lead_name||'').toLowerCase().includes(q)
+  ));
+}
+
+function renderCRM(contacts) {
+  const tbody = document.getElementById('crm-body');
+  tbody.innerHTML = contacts.map(c => `
+    <tr>
+      <td>${c.lead_name||'—'}</td>
+      <td>${c.phone_number}</td>
+      <td>${c.total_calls}</td>
+      <td>${c.booked}</td>
+      <td>${fmtTime(c.last_call)}</td>
+      <td><span class="badge badge-${c.last_outcome}">${c.last_outcome||'—'}</span></td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openContactModal('${c.phone_number}','${(c.lead_name||'').replace(/'/g,"\\'")}')">History</button>
+        <button class="btn btn-primary btn-sm" onclick="quickCall('${c.phone_number}','${(c.lead_name||'').replace(/'/g,"\\'")}')">📞</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" class="empty-state">No contacts yet</td></tr>';
+}
+
+async function quickCall(phone, name) {
+  try {
+    await api('/call/single', {method:'POST', body:JSON.stringify({phone_number:phone, lead_name:name})});
+    toast('Call dispatched to ' + name + ' (' + phone + ')');
+  } catch(e) { toast(e.message, false); }
+}
+
+let _contactPhone = '';
+async function openContactModal(phone, name) {
+  _contactPhone = phone;
+  document.getElementById('contact-modal-title').textContent = `${name || phone} — History`;
+  document.getElementById('contact-new-memory').value = '';
+  try {
+    const data = await api(`/contacts/${encodeURIComponent(phone)}/history`);
+    let html = '';
+    if (data.memories && data.memories.length) {
+      html += '<div style="margin-bottom:14px"><strong style="font-size:12px;color:var(--muted)">REMEMBERED NOTES</strong>';
+      html += data.memories.map(m => `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">• ${m.insight} <span style="color:var(--muted);font-size:11px">${fmtTime(m.created_at)}</span></div>`).join('');
+      html += '</div>';
+    }
+    if (data.calls && data.calls.length) {
+      html += '<div><strong style="font-size:12px;color:var(--muted)">CALL HISTORY</strong>';
+      html += '<div class="table-wrap"><table style="margin-top:8px"><thead><tr><th>Time</th><th>Outcome</th><th>Duration</th><th>Notes</th></tr></thead><tbody>';
+      html += data.calls.map(c => `<tr><td>${fmtTime(c.timestamp)}</td><td><span class="badge badge-${c.outcome}">${c.outcome}</span></td><td>${fmtDur(c.duration_seconds)}</td><td>${c.notes||''}</td></tr>`).join('');
+      html += '</tbody></table></div></div>';
+    }
+    if (!html) html = '<p style="color:var(--muted)">No history found.</p>';
+    document.getElementById('contact-modal-body').innerHTML = html;
+  } catch(e) { document.getElementById('contact-modal-body').innerHTML = '<p>Error loading history</p>'; }
+  openModal('modal-contact');
+}
+
+async function addMemoryNote() {
+  const insight = document.getElementById('contact-new-memory').value.trim();
+  if (!insight) return;
+  try {
+    await api(`/contacts/${encodeURIComponent(_contactPhone)}/memory`, {method:'POST', body:JSON.stringify({insight})});
+    toast('Memory saved');
+    document.getElementById('contact-new-memory').value = '';
+    openContactModal(_contactPhone, '');
+  } catch(e) { toast(e.message, false); }
+}
+
+// ── Agent Profiles ────────────────────────────────────────────────────────────
+const ALL_TOOLS = ['check_availability','book_appointment','end_call','transfer_to_human','send_sms_confirmation','lookup_contact','remember_details','book_calcom','cancel_calcom'];
+
+async function loadProfiles() {
+  try {
+    const profiles = await api('/agent-profiles');
+    const el = document.getElementById('profiles-grid');
+    if (!profiles.length) {
+      el.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="ico">🤖</div><div>No profiles yet — create one above</div></div>';
+      return;
+    }
+    el.innerHTML = profiles.map(p => `
+      <div class="profile-card${p.is_default ? ' default-profile' : ''}">
+        ${p.is_default ? '<div class="default-badge">DEFAULT</div>' : ''}
+        <div class="profile-name">${p.name}</div>
+        <div class="profile-meta">
+          Voice: ${p.voice}<br>
+          Model: ${p.model}<br>
+          Created: ${fmtTime(p.created_at)}
+        </div>
+        <div class="profile-actions">
+          <button class="btn btn-outline btn-sm" onclick="openEditProfileModal(${JSON.stringify(p).replace(/"/g,'&quot;')})">Edit</button>
+          ${!p.is_default ? `<button class="btn btn-primary btn-sm" onclick="setDefaultProfile('${p.id}')">Set Default</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}')">🗑</button>
+        </div>
+      </div>`).join('');
+  } catch(e) { toast(e.message, false); }
+}
+
+function buildToolCheckboxes(selected=[]) {
+  return ALL_TOOLS.map(t => `
+    <label class="tool-check">
+      <input type="checkbox" name="tool" value="${t}" ${!selected.length || selected.includes(t) ? 'checked' : ''} />
+      ${t}
+    </label>`).join('');
+}
+
+function openNewProfileModal() {
+  document.getElementById('profile-modal-title').textContent = 'New Agent Profile';
+  document.getElementById('profile-edit-id').value = '';
+  document.getElementById('pr-name').value = '';
+  document.getElementById('pr-voice').value = 'Aoede';
+  document.getElementById('pr-model').value = 'gemini-3.1-flash-live-preview';
+  document.getElementById('pr-prompt').value = '';
+  document.getElementById('pr-default').checked = false;
+  document.getElementById('tools-checkboxes').innerHTML = buildToolCheckboxes();
+  openModal('modal-profile');
+}
+
+function openEditProfileModal(p) {
+  document.getElementById('profile-modal-title').textContent = 'Edit Profile';
+  document.getElementById('profile-edit-id').value = p.id;
+  document.getElementById('pr-name').value = p.name;
+  document.getElementById('pr-voice').value = p.voice;
+  document.getElementById('pr-model').value = p.model;
+  document.getElementById('pr-prompt').value = p.system_prompt || '';
+  document.getElementById('pr-default').checked = !!p.is_default;
+  let tools = [];
+  try { tools = JSON.parse(p.enabled_tools || '[]'); } catch {}
+  document.getElementById('tools-checkboxes').innerHTML = buildToolCheckboxes(tools);
+  openModal('modal-profile');
+}
+
+async function saveProfile() {
+  const id = document.getElementById('profile-edit-id').value;
+  const name = document.getElementById('pr-name').value.trim();
+  if (!name) { toast('Profile name is required', false); return; }
+  const checked = [...document.querySelectorAll('#tools-checkboxes input[type=checkbox]:checked')].map(x => x.value);
+  const body = {
+    name, voice: document.getElementById('pr-voice').value,
+    model: document.getElementById('pr-model').value,
+    system_prompt: document.getElementById('pr-prompt').value.trim() || null,
+    enabled_tools: checked,
+    is_default: document.getElementById('pr-default').checked,
+  };
+  try {
+    if (id) {
+      await api(`/agent-profiles/${id}`, {method:'PUT', body:JSON.stringify(body)});
+    } else {
+      await api('/agent-profiles', {method:'POST', body:JSON.stringify(body)});
+    }
+    toast('Profile saved');
+    closeModal('modal-profile');
+    loadProfiles();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function setDefaultProfile(id) {
+  try { await api(`/agent-profiles/${id}/set-default`, {method:'POST'}); toast('Default updated'); loadProfiles(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function deleteProfile(id) {
+  if (!confirm('Delete this profile?')) return;
+  try { await api(`/agent-profiles/${id}`, {method:'DELETE'}); toast('Deleted'); loadProfiles(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function loadProfilesIntoSelect(elId) {
+  try {
+    const profiles = await api('/agent-profiles');
+    const sel = document.getElementById(elId);
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— Default —</option>' + profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    if (cur) sel.value = cur;
+  } catch {}
+}
+
+// ── Prompt Editor ─────────────────────────────────────────────────────────────
+async function loadPrompt() {
+  try {
+    const s = await api('/settings/SYSTEM_PROMPT');
+    if (s.value) { document.getElementById('prompt-editor').value = s.value; return; }
+  } catch {}
+  try {
+    const { DEFAULT_SYSTEM_PROMPT } = await import('/prompts_export.js').catch(() => ({}));
+    if (DEFAULT_SYSTEM_PROMPT) { document.getElementById('prompt-editor').value = DEFAULT_SYSTEM_PROMPT; return; }
+  } catch {}
+  document.getElementById('prompt-editor').value = '# Paste your system prompt here\nYou are Priya, an AI appointment booking assistant...\n';
+}
+
+async function savePrompt() {
+  const val = document.getElementById('prompt-editor').value;
+  try {
+    await api('/settings/SYSTEM_PROMPT', {method:'POST', body:JSON.stringify({value: val})});
+    toast('Prompt saved — applies to new calls using default profile');
+  } catch(e) { toast(e.message, false); }
+}
+
+function resetPrompt() {
+  if (confirm('Reset to built-in default prompt?')) {
+    document.getElementById('prompt-editor').value = '';
+    toast('Cleared — save to apply');
+  }
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+const SETTINGS_SCHEMA = [
+  { section: 'LiveKit Cloud', keys: [
+    { key:'LIVEKIT_URL',        label:'WebSocket URL',    desc:'wss://your-project.livekit.cloud' },
+    { key:'LIVEKIT_API_KEY',    label:'API Key',          desc:'APIxxxx…', secret:true },
+    { key:'LIVEKIT_API_SECRET', label:'API Secret',       desc:'xxxx…',    secret:true },
+  ]},
+  { section: 'Google Gemini', keys: [
+    { key:'GOOGLE_API_KEY',      label:'API Key',         desc:'AIzaSy…', secret:true },
+    { key:'GEMINI_MODEL',        label:'Model ID',        desc:'gemini-3.1-flash-live-preview' },
+    { key:'GEMINI_TTS_VOICE',    label:'TTS Voice',       desc:'Aoede | Charon | Fenrir | Kore | Puck' },
+    { key:'USE_GEMINI_REALTIME', label:'Use Realtime',    desc:'true | false' },
+  ]},
+  { section: 'Vobiz SIP', keys: [
+    { key:'VOBIZ_SIP_DOMAIN',      label:'SIP Domain',      desc:'xxxxx.sip.vobiz.ai' },
+    { key:'VOBIZ_USERNAME',        label:'Username',         desc:'' },
+    { key:'VOBIZ_PASSWORD',        label:'Password',         desc:'', secret:true },
+    { key:'VOBIZ_OUTBOUND_NUMBER', label:'Outbound Number',  desc:'+919876543210' },
+    { key:'OUTBOUND_TRUNK_ID',     label:'Trunk ID',         desc:'ST_xxxxxx' },
+    { key:'DEFAULT_TRANSFER_NUMBER', label:'Transfer Number', desc:'+919876543210' },
+  ]},
+  { section: 'Supabase', keys: [
+    { key:'SUPABASE_URL',         label:'Project URL',     desc:'https://xxx.supabase.co' },
+    { key:'SUPABASE_SERVICE_KEY', label:'Service Key',     desc:'eyJhbGci…', secret:true },
+  ]},
+  { section: 'Twilio SMS (optional)', keys: [
+    { key:'TWILIO_ACCOUNT_SID', label:'Account SID', desc:'ACxxx…' },
+    { key:'TWILIO_AUTH_TOKEN',  label:'Auth Token',  desc:'xxx…', secret:true },
+    { key:'TWILIO_FROM_NUMBER', label:'From Number', desc:'+1234567890' },
+  ]},
+  { section: 'Cal.com (optional)', keys: [
+    { key:'CALCOM_API_KEY',       label:'API Key',       desc:'cal_live_xxx…', secret:true },
+    { key:'CALCOM_EVENT_TYPE_ID', label:'Event Type ID', desc:'123456' },
+    { key:'CALCOM_TIMEZONE',      label:'Timezone',      desc:'Asia/Kolkata' },
+  ]},
+  { section: 'S3 / Storage (optional)', keys: [
+    { key:'S3_ACCESS_KEY_ID',     label:'Access Key ID',    desc:'' },
+    { key:'S3_SECRET_ACCESS_KEY', label:'Secret Access Key', desc:'', secret:true },
+    { key:'S3_ENDPOINT_URL',      label:'Endpoint URL',     desc:'https://xxx.supabase.co/storage/v1/s3' },
+    { key:'S3_REGION',            label:'Region',           desc:'ap-northeast-1' },
+    { key:'S3_BUCKET',            label:'Bucket',           desc:'call-recordings' },
+  ]},
+  { section: 'Deepgram (pipeline fallback STT)', keys: [
+    { key:'DEEPGRAM_API_KEY', label:'API Key', desc:'xxx…', secret:true },
+  ]},
+];
+
+let _settingsData = {};
+
+async function loadSettings() {
+  try {
+    _settingsData = await api('/settings');
+    const el = document.getElementById('settings-container');
+    el.innerHTML = SETTINGS_SCHEMA.map(section => `
+      <div class="card settings-section">
+        <h3>${section.section}</h3>
+        ${section.keys.map(item => {
+          const s = _settingsData[item.key] || {};
+          const displayVal = item.secret
+            ? (s.configured ? '••••••••• (set in VPS)' : 'NOT SET')
+            : (s.value || 'NOT SET');
+          const notSetStyle = !s.configured ? 'color:var(--danger)' : '';
+          return `<div class="setting-row">
+            <div class="setting-label">
+              <div class="key">${item.key}</div>
+              <div class="desc">${item.label}${item.desc ? ' — ' + item.desc : ''}</div>
+            </div>
+            <div class="setting-input" style="flex:1">
+              <code style="font-size:12px;color:var(--text);${notSetStyle}">${displayVal}</code>
+            </div>
+            <div class="configured-dot ${s.configured ? 'yes' : 'no'}" title="${s.configured ? 'Configured' : 'Not set'}"></div>
+          </div>`;
+        }).join('')}
+      </div>`).join('');
+  } catch(e) { toast('Load settings error: ' + e.message, false); }
+}
+
+// saveSettings is intentionally removed — configuration is managed via VPS env vars only.
+
+// ── Live Logs ─────────────────────────────────────────────────────────────────
+let _logTimer = null;
+
+async function loadLogs() {
+  const level = document.getElementById('log-level-filter').value;
+  const source = document.getElementById('log-source-filter').value;
+  try {
+    const logs = await api(`/logs?limit=200${level?'&level='+level:''}${source?'&source='+source:''}`);
+    const el = document.getElementById('log-container');
+    el.innerHTML = logs.map(l => `
+      <div class="log-entry log-${l.level}">
+        <span style="color:var(--muted);margin-right:8px">${fmtTime(l.timestamp)}</span>
+        <span style="font-weight:600;margin-right:6px">[${l.source}]</span>
+        ${l.message}
+        ${l.detail ? `<span style="color:var(--muted);display:block;padding-left:20px;font-size:11px">${l.detail.slice(0,200)}</span>` : ''}
+      </div>`).join('') || '<div style="color:var(--muted);padding:16px;text-align:center">No log entries</div>';
+    el.scrollTop = el.scrollHeight;
+  } catch {}
+}
+
+async function clearLogs() {
+  if (!confirm('Clear all logs?')) return;
+  try { await api('/logs', {method:'DELETE'}); toast('Logs cleared'); loadLogs(); }
+  catch(e) { toast(e.message, false); }
+}
+
+// Auto-refresh logs
+function setupLogAutoRefresh() {
+  clearInterval(_logTimer);
+  const cb = document.getElementById('log-auto-refresh');
+  if (cb && cb.checked) {
+    _logTimer = setInterval(() => {
+      if (document.getElementById('page-live-logs').classList.contains('active')) loadLogs();
+    }, 5000);
+  }
+}
+document.getElementById('log-auto-refresh').addEventListener('change', setupLogAutoRefresh);
+setupLogAutoRefresh();
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.classList.remove('open');
+  });
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return isNaN(d) ? ts : d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function fmtDur(sec) {
+  if (!sec) return '—';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+onPageLoad('dashboard');
+</script>
+</body>
+</html>
