@@ -115,9 +115,9 @@ def _build_session(
             from google.genai import types as _gt
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
-                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_LOW,
-                    silence_duration_ms=600,
-                    prefix_padding_ms=200,
+                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
+                    silence_duration_ms=300,
+                    prefix_padding_ms=100,
                 ),
             )
             _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
