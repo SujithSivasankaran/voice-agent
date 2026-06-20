@@ -313,25 +313,30 @@ async def entrypoint(ctx: agents.JobContext):
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
     # ── Build system prompt ───────────────────────────────────────────────────
-    # Incoming calls use the inbound (reception) prompt + summaries of every active
-    # campaign (so callers can ask about anything running). Outgoing calls use the
+    # Incoming calls get only a tiny campaign index. Details are fetched on demand
+    # through lookup_campaign, so every turn does not carry every summary. Outgoing calls use the
     # campaign script passed in via metadata, else the default outreach prompt.
     if is_inbound:
-        active_summaries = ""
+        campaign_catalog = ""
         try:
             actives = await get_active_campaigns()
-            active_summaries = "\n".join(
-                f"• {a.get('name')}: {a.get('summary')}"
-                for a in actives if a.get("summary")
-            )
+            hints = []
+            for campaign in actives:
+                name = " ".join(str(campaign.get("name") or "").split())
+                if not name:
+                    continue
+                summary = " ".join(str(campaign.get("summary") or "").split())
+                gist = summary[:100].rsplit(" ", 1)[0] if len(summary) > 100 else summary
+                hints.append(f"• {name}" + (f" — {gist}" if gist else ""))
+            campaign_catalog = "\n".join(hints)
         except Exception as exc:
             logger.warning("Could not load active campaigns for inbound: %s", exc)
-        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt, active_summaries)
+        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt, campaign_catalog)
     else:
-        # Campaign/custom prompt from metadata wins; otherwise the editable default
-        # base (Supabase), falling back to the built-in DEFAULT_SYSTEM_PROMPT.
+        # Campaign/custom metadata wins. The compact runtime prompt is the
+        # cost-safe default; the legacy long Supabase prompt is opt-in.
         base = custom_prompt
-        if not base:
+        if not base and os.environ.get("USE_LEGACY_DEFAULT_PROMPT", "false").lower() == "true":
             try:
                 base = await get_default_prompt()
             except Exception:
@@ -378,7 +383,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
     tools_instance = AppointmentTools(ctx, phone_number, lead_name)
-    tool_list = tools_instance.build_tool_list(enabled_tools)
+    tool_list = tools_instance.build_tool_list(enabled_tools, inbound=is_inbound)
     session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
     tools_instance.session = session
     agent = Agent(instructions=system_prompt, tools=tool_list)

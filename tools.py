@@ -12,6 +12,7 @@ from db import (
     insert_trial, log_call, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
+    get_active_campaigns,
 )
 
 logger = logging.getLogger("appointment-tools")
@@ -39,22 +40,72 @@ class AppointmentTools(llm.ToolContext):
         self.session = None
         super().__init__(tools=[])
 
-    def build_tool_list(self, enabled: list) -> list:
-        """Return tool methods filtered by the enabled list. Empty list = all enabled."""
-        all_methods = [
+    def build_tool_list(self, enabled: list, *, inbound: bool = False) -> list:
+        """Return tools filtered by the enabled list.
+
+        An empty list enables only tools used by the standard call flows.
+        Optional integrations must be explicitly enabled by name so their
+        schemas do not inflate every model turn.
+        """
+        default_methods = [
             self.check_availability, self.book_appointment, self.end_call,
             self.transfer_to_human, self.send_sms_confirmation,
             # self.lookup_contact,  # disabled for now — re-add to re-enable
-            self.remember_details, self.book_calcom, self.cancel_calcom,
+            self.remember_details, self.lookup_campaign,
         ]
+        optional_methods = [self.book_calcom, self.cancel_calcom]
         if not enabled:
-            return all_methods
+            return default_methods
+        all_methods = default_methods + optional_methods
         name_map = {m.__name__: m for m in all_methods}
         # Availability, atomic booking, and clean call termination are core
         # behavior and must remain available regardless of profile filtering.
-        required = {"check_availability", "book_appointment", "end_call"}
+        required = {"check_availability", "book_appointment", "end_call", "lookup_campaign"}
         selected = set(enabled) | required
+        if inbound:
+            selected.add("lookup_campaign")
         return [method for method in all_methods if method.__name__ in selected]
+
+    @llm.function_tool
+    async def lookup_campaign(self, query: str) -> str:
+        """Find details of an active campaign only when a caller asks about it.
+        query: campaign name, offer, or keywords mentioned by the caller
+        """
+        try:
+            campaigns = await get_active_campaigns()
+            if not campaigns:
+                return "No active campaigns were found. Offer to record a callback request."
+
+            query_words = {
+                word for word in "".join(
+                    char.lower() if char.isalnum() else " " for char in query
+                ).split() if len(word) > 2
+            }
+
+            def _score(campaign: dict) -> int:
+                name = str(campaign.get("name") or "").lower()
+                summary = str(campaign.get("summary") or "").lower()
+                searchable = f"{name} {summary}"
+                score = sum(2 if word in name else 1 for word in query_words if word in searchable)
+                if query.strip().lower() in name:
+                    score += 5
+                return score
+
+            ranked = sorted(campaigns, key=_score, reverse=True)
+            best = ranked[0]
+            if _score(best) <= 0:
+                names = ", ".join(str(c.get("name")) for c in campaigns[:8])
+                return f"No confident match. Active campaign names: {names}. Ask which one they mean."
+
+            name = str(best.get("name") or "Campaign")
+            summary = " ".join(str(best.get("summary") or "").split())
+            if not summary:
+                return f"{name} is active, but detailed information is unavailable. Offer a callback."
+            # Keep retrieved context bounded; never inject a full campaign script.
+            return f"{name}: {summary[:700]}"
+        except Exception as exc:
+            logger.warning("Campaign lookup failed: %s", exc)
+            return "Campaign lookup is temporarily unavailable. Offer to record a callback request."
 
     @llm.function_tool
     async def check_availability(self, date: str, time: str, location: str) -> str:

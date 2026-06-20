@@ -189,28 +189,12 @@ async def _regenerate_campaign(campaign_id: str, pending_status: str = "generati
 # ── Campaign runner ───────────────────────────────────────────────────────────
 
 async def _assemble_campaign_call_prompt(campaign: dict) -> str:
-    """Campaign-first prompt plus default business context and other active offers."""
-    from prompts import DEFAULT_SYSTEM_PROMPT, assemble_outbound_prompt
-
-    try:
-        default_prompt = await get_default_prompt() or DEFAULT_SYSTEM_PROMPT
-    except Exception:
-        default_prompt = DEFAULT_SYSTEM_PROMPT
-
-    try:
-        others = await get_active_campaigns()
-        other_summaries = "\n".join(
-            f"• {other.get('name')}: {other.get('summary')}"
-            for other in others
-            if other.get("id") != campaign.get("id") and other.get("summary")
-        )
-    except Exception:
-        other_summaries = ""
-
+    """Compact primary campaign prompt; other campaigns are fetched on demand."""
+    from prompts import assemble_outbound_prompt
     return assemble_outbound_prompt(
-        campaign.get("system_prompt"),
-        other_summaries,
-        default_prompt,
+        campaign.get("name") or "Campaign",
+        campaign.get("summary") or "",
+        campaign.get("purpose") or "",
     )
 
 
