@@ -253,7 +253,6 @@
     <li><a href="#" data-page="call-logs"><span class="ico">🗒️</span> Call Logs</a></li>
     <li><a href="#" data-page="crm"><span class="ico">👥</span> CRM</a></li>
     <li><a href="#" data-page="agent-profiles"><span class="ico">🤖</span> Agent Profiles</a></li>
-    <li><a href="#" data-page="prompt-editor"><span class="ico">✏️</span> Prompt Editor</a></li>
     <li><a href="#" data-page="settings"><span class="ico">⚙️</span> Settings</a></li>
     <li><a href="#" data-page="live-logs"><span class="ico">📡</span> Live Logs</a></li>
   </ul>
@@ -389,7 +388,26 @@
 <!-- CAMPAIGNS -->
 <div class="page" id="page-campaigns">
   <h1>Campaigns</h1>
-  <p class="subtitle">Schedule recurring or one-time bulk calling campaigns</p>
+  <p class="subtitle">Describe a campaign's purpose and the AI writes the call script. Active campaigns are also available to inbound callers.</p>
+
+  <!-- Always-on default base script -->
+  <div class="section-title">Default Script</div>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+      <div>
+        <div style="font-weight:600;font-size:15px">⭐ Default (always-on base)</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Used for any outbound call without a specific campaign, and as the foundation everywhere.</div>
+      </div>
+      <span id="default-status" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <textarea id="default-prompt" rows="10" placeholder="Loading…"></textarea>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-sm" onclick="saveDefaultPrompt()">💾 Save Default</button>
+      <button class="btn btn-outline btn-sm" onclick="resetDefaultPrompt()">↩ Reset to Built-in</button>
+    </div>
+  </div>
+
+  <div class="section-title">Campaigns</div>
   <div style="margin-bottom:16px">
     <button class="btn btn-primary" onclick="openNewCampaignModal()">+ New Campaign</button>
   </div>
@@ -461,21 +479,6 @@
   <div class="profile-grid" id="profiles-grid"></div>
 </div>
 
-<!-- PROMPT EDITOR -->
-<div class="page" id="page-prompt-editor">
-  <h1>Prompt Editor</h1>
-  <p class="subtitle">Edit the global default system prompt. Changes apply to new calls using the default profile.</p>
-  <div class="card">
-    <div class="form-group">
-      <label>System Prompt</label>
-      <textarea id="prompt-editor" rows="24"></textarea>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="savePrompt()">💾 Save Prompt</button>
-      <button class="btn btn-outline" onclick="resetPrompt()">↩ Reset to Default</button>
-    </div>
-  </div>
-</div>
 
 <!-- SETTINGS -->
 <div class="page" id="page-settings">
@@ -546,12 +549,8 @@
     </div>
     <div class="form-group" style="margin-top:14px">
       <label>Campaign Purpose ✨</label>
-      <textarea id="cmp-purpose" rows="3" placeholder="Describe in plain English what this campaign is about — e.g. 'Offer a free dental check-up this June and book interested people for a slot.' The AI will write the call script from this."></textarea>
+      <textarea id="cmp-purpose" rows="4" placeholder="Describe in plain English what this campaign is about — e.g. 'Offer a free dental check-up this June and book interested people for a slot.' The AI will write the call script from this."></textarea>
       <div style="font-size:11px;color:var(--muted);margin-top:4px">The agent's script is auto-generated from this and improves as you add feedback.</div>
-    </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Custom System Prompt (advanced — overrides auto-generation)</label>
-      <textarea id="cmp-prompt" rows="3" placeholder="Leave blank to let the AI generate from the purpose above…"></textarea>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-campaign')">Cancel</button>
@@ -685,12 +684,11 @@ document.querySelectorAll('nav a[data-page]').forEach(a => {
 function onPageLoad(page) {
   if (page === 'dashboard')      { loadDashboard(); }
   if (page === 'new-call')       { loadProfilesIntoSelect('sc-profile'); loadProfilesIntoSelect('bk-profile'); }
-  if (page === 'campaigns')      { loadCampaigns(); }
+  if (page === 'campaigns')      { loadCampaigns(); loadDefaultPrompt(); }
   if (page === 'appointments')   { loadAppointments(); }
   if (page === 'call-logs')      { loadCalls(1); }
   if (page === 'crm')            { loadCRM(); }
   if (page === 'agent-profiles') { loadProfiles(); }
-  if (page === 'prompt-editor')  { loadPrompt(); }
   if (page === 'settings')       { loadSettings(); }
   if (page === 'live-logs')      { loadLogs(); }
 }
@@ -882,7 +880,6 @@ function openNewCampaignModal() {
   document.getElementById('cmp-file-name').textContent = 'Click to select CSV';
   document.getElementById('cmp-name').value = '';
   document.getElementById('cmp-purpose').value = '';
-  document.getElementById('cmp-prompt').value = '';
   document.getElementById('cmp-schedule').value = 'once';
   document.getElementById('cmp-time').value = '09:00';
   document.getElementById('cmp-delay').value = '3';
@@ -903,7 +900,6 @@ async function createCampaign() {
   fd.append('schedule_type', document.getElementById('cmp-schedule').value);
   fd.append('schedule_time', document.getElementById('cmp-time').value);
   fd.append('call_delay_seconds', document.getElementById('cmp-delay').value);
-  fd.append('system_prompt', document.getElementById('cmp-prompt').value.trim());
   fd.append('agent_profile_id', document.getElementById('cmp-profile').value || '');
 
   try {
@@ -1243,32 +1239,34 @@ async function loadProfilesIntoSelect(elId) {
   } catch {}
 }
 
-// ── Prompt Editor ─────────────────────────────────────────────────────────────
-async function loadPrompt() {
+// ── Default Script (always-on base) ─────────────────────────────────────────────
+let _defaultPromptBuiltin = null;
+async function loadDefaultPrompt() {
+  const ta = document.getElementById('default-prompt');
+  const st = document.getElementById('default-status');
   try {
-    const s = await api('/settings/SYSTEM_PROMPT');
-    if (s.value) { document.getElementById('prompt-editor').value = s.value; return; }
-  } catch {}
-  try {
-    const { DEFAULT_SYSTEM_PROMPT } = await import('/prompts_export.js').catch(() => ({}));
-    if (DEFAULT_SYSTEM_PROMPT) { document.getElementById('prompt-editor').value = DEFAULT_SYSTEM_PROMPT; return; }
-  } catch {}
-  document.getElementById('prompt-editor').value = '# Paste your system prompt here\nYou are Priya, an AI appointment booking assistant...\n';
+    const d = await api('/default-prompt');
+    ta.value = d.value || '';
+    if (st) st.textContent = d.custom ? 'Custom default in use' : 'Using built-in default';
+  } catch(e) { if (st) st.textContent = 'Could not load'; }
 }
 
-async function savePrompt() {
-  const val = document.getElementById('prompt-editor').value;
+async function saveDefaultPrompt() {
+  const val = document.getElementById('default-prompt').value;
   try {
-    await api('/settings/SYSTEM_PROMPT', {method:'POST', body:JSON.stringify({value: val})});
-    toast('Prompt saved — applies to new calls using default profile');
+    await api('/default-prompt', { method:'POST', body: JSON.stringify({ value: val }) });
+    toast('Default script saved — applies to new calls');
+    loadDefaultPrompt();
   } catch(e) { toast(e.message, false); }
 }
 
-function resetPrompt() {
-  if (confirm('Reset to built-in default prompt?')) {
-    document.getElementById('prompt-editor').value = '';
-    toast('Cleared — save to apply');
-  }
+async function resetDefaultPrompt() {
+  if (!confirm('Reset to the built-in default script?')) return;
+  try {
+    await api('/default-prompt', { method:'POST', body: JSON.stringify({ value: '' }) });
+    toast('Reset to built-in default');
+    loadDefaultPrompt();
+  } catch(e) { toast(e.message, false); }
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

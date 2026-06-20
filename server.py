@@ -23,6 +23,7 @@ load_dotenv(override=False)
 from db import (
     init_db, log_error,
     get_all_settings, save_settings, get_setting, set_setting,
+    get_default_prompt, save_default_prompt,
     get_errors, get_logs, clear_errors,
     insert_appointment, get_all_appointments, cancel_appointment,
     get_all_calls, update_call_notes, get_contacts, get_calls_by_phone,
@@ -692,6 +693,21 @@ async def post_settings(request: Request):
         raise HTTPException(400, "Expected a JSON object")
     await save_settings(body)
     return {"status": "saved", "keys_updated": list(body.keys())}
+
+
+@app.get("/default-prompt")
+async def get_default_prompt_ep():
+    """The editable default base script — saved value, or the built-in fallback."""
+    from prompts import DEFAULT_SYSTEM_PROMPT
+    saved = await get_default_prompt()
+    return {"value": saved or DEFAULT_SYSTEM_PROMPT, "custom": bool(saved)}
+
+
+@app.post("/default-prompt")
+async def set_default_prompt_ep(request: Request):
+    body = await request.json()
+    await save_default_prompt(str(body.get("value", "")))
+    return {"status": "saved"}
 
 
 @app.get("/settings/{key}")

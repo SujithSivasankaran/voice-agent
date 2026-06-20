@@ -130,6 +130,23 @@ async def save_settings(data: dict) -> None:
         await db.table("settings").upsert(rows, on_conflict="key").execute()
 
 
+async def get_default_prompt() -> Optional[str]:
+    """The editable default base script (Supabase-backed). None → use the
+    hardcoded DEFAULT_SYSTEM_PROMPT in prompts.py."""
+    db = await _adb()
+    try:
+        r = await db.table("settings").select("value").eq("key", "DEFAULT_PROMPT").maybe_single().execute()
+        if r and r.data and r.data.get("value"):
+            return r.data["value"]
+    except Exception:
+        pass
+    return None
+
+
+async def save_default_prompt(text: str) -> None:
+    await set_setting("DEFAULT_PROMPT", text)
+
+
 async def get_enabled_tools() -> list:
     """Reads ENABLED_TOOLS from VPS env var (JSON array string or empty → all tools)."""
     raw = _default("ENABLED_TOOLS")

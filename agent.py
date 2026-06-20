@@ -31,7 +31,7 @@ from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import noise_cancellation, silero
 
-from db import init_db, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns
+from db import init_db, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns, get_default_prompt
 from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
 
@@ -290,7 +290,15 @@ async def entrypoint(ctx: agents.JobContext):
             logger.warning("Could not load active campaigns for inbound: %s", exc)
         system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt, active_summaries)
     else:
-        system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
+        # Campaign/custom prompt from metadata wins; otherwise the editable default
+        # base (Supabase), falling back to the built-in DEFAULT_SYSTEM_PROMPT.
+        base = custom_prompt
+        if not base:
+            try:
+                base = await get_default_prompt()
+            except Exception:
+                base = None
+        system_prompt = build_prompt(lead_name, business_name, service_type, base)
 
     # ── Build tool set ────────────────────────────────────────────────────────
     enabled_tools  = meta.get("enabled_tools") or await get_enabled_tools()
