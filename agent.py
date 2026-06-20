@@ -80,6 +80,15 @@ def _caller_number(participant) -> str:
     return num
 
 
+def _is_sip_participant(participant) -> bool:
+    """Identify SIP callers without relying on a particular SDK enum version."""
+    identity = (getattr(participant, "identity", "") or "").lower()
+    attributes = getattr(participant, "attributes", None) or {}
+    return identity.startswith("sip_") or any(
+        str(key).lower().startswith("sip.") for key in attributes
+    )
+
+
 # ── Import Google plugin paths ────────────────────────────────────────────────
 
 _google_realtime = None
@@ -261,18 +270,35 @@ async def entrypoint(ctx: agents.JobContext):
     # ── Connect to LiveKit room ───────────────────────────────────────────────
     await ctx.connect()
 
+    # A SIP participant leaving does not necessarily disconnect the local room,
+    # so listen for both events from the moment we connect.
+    call_ended = asyncio.Event()
+
+    @ctx.room.on("participant_disconnected")
+    def _on_participant_disconnected(participant):
+        if _is_sip_participant(participant):
+            logger.info("SIP participant disconnected: %s", getattr(participant, "identity", "unknown"))
+            call_ended.set()
+
+    @ctx.room.on("disconnected")
+    def _on_room_disconnected(*_args):
+        call_ended.set()
+
     # ── Inbound call? (no outbound number means the caller dialled us) ─────────
     # Inbound calls are routed here by a LiveKit dispatch rule; the caller's SIP
     # participant joins the room instead of us dialing out.
     is_inbound = not phone_number
     if is_inbound:
         caller = await _wait_for_sip_participant(ctx, timeout=15)
-        if caller is not None:
-            caller_num = _caller_number(caller)
-            if caller_num:
-                phone_number = caller_num
-            if getattr(caller, "name", ""):
-                lead_name = caller.name
+        if caller is None:
+            await _log("warning", "Inbound job had no SIP participant; closing without starting AI")
+            await ctx.room.disconnect()
+            return
+        caller_num = _caller_number(caller)
+        if caller_num:
+            phone_number = caller_num
+        if getattr(caller, "name", ""):
+            lead_name = caller.name
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
     # ── Build system prompt ───────────────────────────────────────────────────
@@ -301,36 +327,16 @@ async def entrypoint(ctx: agents.JobContext):
                 base = None
         system_prompt = build_prompt(lead_name, business_name, service_type, base)
 
-    # ── Build tool set ────────────────────────────────────────────────────────
-    enabled_tools  = meta.get("enabled_tools") or await get_enabled_tools()
-    tools_instance = AppointmentTools(ctx, phone_number, lead_name)
-    tool_list      = tools_instance.build_tool_list(enabled_tools)
-
-    # ── Build and start session ───────────────────────────────────────────────
-    session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
-
-    # Give tools a reference to the session so end_call can wait for the
-    # goodbye to finish playing before disconnecting.
-    tools_instance.session = session
-
-    agent = Agent(instructions=system_prompt, tools=tool_list)
-
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVCTelephony(),
-        ),
-    )
-
-    # ── Dial out if no SIP participant in the room yet ────────────────────────
+    # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
-        "sip_" in p.identity for p in ctx.room.remote_participants.values()
+        _is_sip_participant(p) for p in ctx.room.remote_participants.values()
     )
 
     if phone_number and not sip_already_present and not is_inbound:
         if not trunk_id:
             await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
+            await ctx.room.disconnect()
+            return
         else:
             logger.info("Dialling %s via trunk %s …", phone_number, trunk_id)
             try:
@@ -352,32 +358,54 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         logger.info("SIP participant already present — skipping dial-out")
 
-    # ── Speak opening line ────────────────────────────────────────────────────
-    # INBOUND: the caller dialled us and expects to hear someone, so speak the
-    # fixed greeting immediately via the attached TTS (say()). Then the Gemini
-    # realtime model handles the rest of the conversation.
-    # OUTBOUND: left reactive (replies after the callee says hello) — unchanged.
-    if is_inbound:
-        greeting = "Hi, this is Priya from Harry's Fitcamp. How can I help you?"
-        try:
-            await session.say(greeting, allow_interruptions=True)
-        except Exception as exc:
-            logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
+    # Avoid Gemini charges for ringing, busy, and no-answer time. The realtime
+    # model connection is created only after wait_until_answered succeeds.
+    if call_ended.is_set():
+        await _log("info", f"Call ended before AI session started — phone={phone_number}")
+        await ctx.room.disconnect()
+        return
 
-    # ── Wait for the room to close (SIP participant hangs up) ─────────────────
-    # We listen for the room's "disconnected" event rather than calling
-    # session.wait_for_close() which does not exist in livekit-agents 1.x.
-    disconnect = asyncio.Event()
-
-    @ctx.room.on("disconnected")
-    def _on_room_disconnected():
-        disconnect.set()
+    enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
+    tools_instance = AppointmentTools(ctx, phone_number, lead_name)
+    tool_list = tools_instance.build_tool_list(enabled_tools)
+    session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
+    tools_instance.session = session
+    agent = Agent(instructions=system_prompt, tools=tool_list)
 
     try:
-        await asyncio.wait_for(disconnect.wait(), timeout=7200)  # 2-hour hard cap
-    except asyncio.TimeoutError:
-        await _log("warning", f"Call hit 2-hour timeout: {phone_number}")
+        await session.start(
+            agent=agent,
+            room=ctx.room,
+            room_input_options=RoomInputOptions(
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
+        )
+
+        if is_inbound:
+            greeting = "Hi, this is Tina from Harry's Fitcamp. How can I help you?"
+            try:
+                await session.say(greeting, allow_interruptions=True)
+            except Exception as exc:
+                logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
+
+        # SIP hang-up is the normal stop signal. This post-answer limit is only
+        # a final guard against abandoned jobs.
+        max_call_seconds = max(60, int(os.environ.get("MAX_CALL_DURATION_SECONDS", "600")))
+        try:
+            await asyncio.wait_for(call_ended.wait(), timeout=max_call_seconds)
+        except asyncio.TimeoutError:
+            await _log("warning", f"Call hit {max_call_seconds}s safety timeout: {phone_number}")
     finally:
+        # Explicitly closing AgentSession closes the Gemini realtime connection;
+        # disconnecting the room alone is not a reliable billing boundary.
+        try:
+            await session.aclose()
+        except Exception as exc:
+            logger.warning("Agent session cleanup failed: %s", exc)
+        try:
+            await ctx.room.disconnect()
+        except Exception:
+            pass
         await _log("info", f"Call ended — phone={phone_number}")
 
 

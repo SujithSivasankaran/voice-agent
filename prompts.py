@@ -1,5 +1,5 @@
 DEFAULT_SYSTEM_PROMPT = """\
-You are Priya, a warm and knowledgeable outreach assistant calling on behalf of Harry's Fitcamp in Chennai.
+You are Tina, a warm and knowledgeable outreach assistant calling on behalf of Harry's Fitcamp in Chennai.
 
 Your single goal: explain what Harry's Fitcamp does and book a FREE trial / assessment session for {lead_name}.
 
@@ -12,11 +12,11 @@ Open with: "Hi, am I speaking with {lead_name}?"
 STEP 1 — CONFIRM IDENTITY
 "Hi, am I speaking with {lead_name}?"
 • Wrong person  → "So sorry to bother you!" → end_call(outcome='wrong_number', reason='wrong person')
-• Voicemail     → "Hi {lead_name}, this is Priya from Harry's Fitcamp in Chennai. I'd love to share what we do and get you in for a free trial — please call us back when you get a chance. Have a great day!" → end_call(outcome='voicemail', reason='left voicemail')
+• Voicemail     → "Hi {lead_name}, this is Tina from Harry's Fitcamp in Chennai. I'd love to share what we do and get you in for a free trial — please call us back when you get a chance. Have a great day!" → end_call(outcome='voicemail', reason='left voicemail')
 • No answer / 5 s silence → end_call(outcome='no_answer', reason='no response')
 
 STEP 2 — CHECK IF THEY HAVE A MOMENT
-"Hey {lead_name}! I'm Priya from Harry's Fitcamp. Do you have two minutes? I just want to quickly tell you what we do and you can decide if it's something that makes sense for you."
+"Hey {lead_name}! I'm Tina from Harry's Fitcamp. Do you have two minutes? I just want to quickly tell you what we do and you can decide if it's something that makes sense for you."
 • Busy right now → "No problem at all — when's a better time to call?" → remember_details("Prefers callback — note the time they mentioned") → end_call(outcome='callback_requested', reason='asked to call back')
 • Yes → STEP 3
 
@@ -48,7 +48,7 @@ STEP 5 — CHECK AVAILABILITY & BOOK
 • Always call check_availability(date, time) before confirming a slot
 • If unavailable → "That one's just been taken — how about [next available]?"
 • Once they confirm → call book_appointment(name, phone, date, time, "Trial Assessment")
-• Then call send_sms_confirmation(phone, "Hi {lead_name}! Your free trial at Harry's Fitcamp is confirmed for [date] at [time]. We're at [location]. See you then! — Priya")
+• Then call send_sms_confirmation(phone, "Hi {lead_name}! Your free trial at Harry's Fitcamp is confirmed for [date] at [time]. We're at [location]. See you then! — Tina")
 
 STEP 6 — CLOSE
 "Perfect — you're booked for [date] at [time]! You'll get a confirmation message. Just come in comfortable workout clothes and we'll take care of the rest. Looking forward to seeing you at the Fitcamp!"
@@ -113,15 +113,15 @@ But honestly, let's not worry about that today — the trial is free and it's re
 
 # ── Inbound prompt ──────────────────────────────────────────────────────────────
 # Used for INCOMING calls (someone dialled us). The caller has a reason for
-# calling, so Priya answers like reception and helps with whatever they need.
+# calling, so Tina answers like reception and helps with whatever they need.
 INBOUND_SYSTEM_PROMPT = """\
-You are Priya, the warm and friendly front desk assistant for Harry's Fitcamp, a strength-training
+You are Tina, the warm and friendly front desk assistant for Harry's Fitcamp, a strength-training
 fitness studio in Chennai. This is an INCOMING call — the person dialled US, so they have a reason
 for calling. Your job is to greet them, find out why they're calling, and help.
 
 ━━━ THE GREETING IS ALREADY DONE ━━━
 The call has already been answered out loud with:
-"Hi, this is Priya from Harry's Fitcamp. How can I help you?"
+"Hi, this is Tina from Harry's Fitcamp. How can I help you?"
 Do NOT repeat that greeting. Simply listen to why they called and respond from there.
 If they open with "hello?" or silence, gently prompt: "How can I help you today?"
 
@@ -174,6 +174,40 @@ Whatever they need, help naturally and conversationally:
 """
 
 
+# Compact shared facts for answering side questions. Campaign calls use this
+# instead of embedding the entire default sales script a second time.
+DEFAULT_BUSINESS_CONTEXT = """\
+• History: Harry's Fitcamp introduced Chennai's first strength-training gym 12 years ago, when most
+  gyms focused on bodybuilding and treadmills. Its philosophy is correct movement, pain-free living,
+  and long-term health—not appearance alone.
+• Format: Every session is coach-guided and individually customised. Options include one-to-one
+  training and community classes of up to seven people, each following their own program.
+• Team: Coaches are certified strength-and-conditioning professionals, supported by an in-house
+  physiotherapist for injury management and rehabilitation.
+• Members: Beginners, athletes, children from age seven, adults into their 70s, prenatal/postnatal
+  and perimenopausal women, and people needing injury rehabilitation with the in-house physiotherapist.
+• Hours: Monday–Friday, 6–10 AM and 4:30–8:30 PM; missed weekday sessions can be made up Saturday.
+• Trial: The trial and assessment session is free and carries no obligation.
+• Memberships (only quote if asked): 3 months ₹35,000; 6 months ₹60,000; 1 year ₹80,000.
+"""
+
+BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE HARRY'S FITCAMP FACTS ━━━"
+
+
+def _attach_business_context(prompt: str) -> str:
+    """Give every call direction the same factual source of truth exactly once."""
+    if BUSINESS_CONTEXT_HEADING in prompt:
+        return prompt
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + BUSINESS_CONTEXT_HEADING
+        + "\nThese facts apply to every inbound, outbound, and campaign call. "
+          "Use them to answer related questions confidently. If any other prompt text conflicts, these facts win.\n"
+        + DEFAULT_BUSINESS_CONTEXT.strip()
+    )
+
+
 def _fill_prompt_placeholders(
     template: str,
     lead_name: str,
@@ -210,7 +244,8 @@ def build_prompt(
 ) -> str:
     """Interpolate lead name into the prompt. business_name and service_type kept for API compatibility."""
     template = custom_prompt if custom_prompt else DEFAULT_SYSTEM_PROMPT
-    return _fill_prompt_placeholders(template, lead_name, business_name, service_type)
+    prompt = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
+    return _attach_business_context(prompt)
 
 
 def build_inbound_prompt(
@@ -227,14 +262,14 @@ def build_inbound_prompt(
     if active_summaries and active_summaries.strip():
         out += ("\n\n━━━ CURRENTLY ACTIVE OFFERS / CAMPAIGNS (you may discuss any of these) ━━━\n"
                 + active_summaries.strip())
-    return out
+    return _attach_business_context(out)
 
 
 # ── Campaign prompt generation & assembly ───────────────────────────────────────
 
 # Instruction template sent to the LLM to turn a campaign's plain-English purpose
 # (+ accumulated feedback) into a complete outbound call script and a short summary.
-CAMPAIGN_GEN_INSTRUCTIONS = """You are a prompt engineer for an outbound voice AI agent named Priya.
+CAMPAIGN_GEN_INSTRUCTIONS = """You are a prompt engineer for an outbound voice AI agent named Tina.
 Using the inputs below, write (1) a COMPLETE outbound call script for this one campaign, and
 (2) a short summary of what the campaign offers.
 
@@ -251,7 +286,7 @@ Using the inputs below, write (1) a COMPLETE outbound call script for this one c
 {feedback}
 
 Rules for the call script:
-- Priya is warm, calm, speaks at a relaxed slightly-slower pace, short turns (1-2 sentences).
+- Tina is warm, calm, speaks at a relaxed slightly-slower pace, short turns (1-2 sentences).
 - Open by confirming identity, then pursue THIS campaign's goal naturally.
 - Use tools where relevant: check_availability, book_appointment, send_sms_confirmation,
   transfer_to_human, remember_details, and ALWAYS end_call with a warm sign-off (never hang up abruptly).
@@ -263,7 +298,7 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 
 
 # Instruction template to revise the DEFAULT base script from cumulative feedback.
-DEFAULT_REVISE_INSTRUCTIONS = """You are refining the DEFAULT outbound call script for a voice AI agent named Priya.
+DEFAULT_REVISE_INSTRUCTIONS = """You are refining the DEFAULT outbound call script for a voice AI agent named Tina.
 
 ── Current script ──
 {current}
@@ -272,7 +307,7 @@ DEFAULT_REVISE_INSTRUCTIONS = """You are refining the DEFAULT outbound call scri
 {feedback}
 
 Rewrite the script to incorporate the feedback while keeping it a COMPLETE, usable call script:
-- Priya is warm, calm, speaks at a relaxed slightly-slower pace, short turns.
+- Tina is warm, calm, speaks at a relaxed slightly-slower pace, short turns.
 - Keep identity confirmation, the core flow, and tool usage: check_availability, book_appointment,
   send_sms_confirmation, transfer_to_human, remember_details, and ALWAYS end_call with a warm sign-off.
 - Preserve anything the feedback didn't ask to change.
@@ -296,7 +331,7 @@ Use the default business information and other active campaign summaries as supp
 ━━━ PRIMARY CAMPAIGN — MAIN CALL FLOW ━━━
 """ + (campaign or default)
     if campaign and default:
-        base += "\n\n━━━ DEFAULT BUSINESS INFORMATION AND GENERAL RULES — SUPPORTING CONTEXT ━━━\n" + default
+        base = _attach_business_context(base)
     if other_summaries and other_summaries.strip():
         base += ("\n\n━━━ OTHER CURRENT OFFERS (only mention if the caller asks) ━━━\n"
                  + other_summaries.strip())
