@@ -26,7 +26,8 @@ from db import (
     get_default_prompt, save_default_prompt,
     get_default_feedback, append_default_feedback,
     get_errors, get_logs, clear_errors,
-    insert_appointment, get_all_appointments, cancel_appointment,
+    TrialSlotUnavailable, insert_trial, get_all_trials, cancel_trial,
+    get_next_available_trial_slots,
     get_all_calls, update_call_notes, get_contacts, get_calls_by_phone,
     get_stats,
     create_campaign, get_all_campaigns, get_campaign, update_campaign_status,
@@ -467,25 +468,36 @@ async def call_batch(
 
 @app.get("/appointments")
 async def list_appointments(date: Optional[str] = Query(None)):
-    return await get_all_appointments(date_filter=date)
+    return await get_all_trials(date_filter=date)
 
 
 @app.post("/appointments")
 async def create_appointment(request: Request):
     body = await request.json()
-    required = ["name", "phone", "date", "time", "service"]
+    required = ["name", "phone", "date", "time", "location"]
     for f in required:
         if not body.get(f):
             raise HTTPException(400, f"{f} is required")
-    booking_id = await insert_appointment(
-        body["name"], body["phone"], body["date"], body["time"], body["service"]
-    )
+    try:
+        booking_id = await insert_trial(
+            body["name"], body["phone"], body["date"], body["time"], body["location"]
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except TrialSlotUnavailable as exc:
+        alternatives = await get_next_available_trial_slots(
+            body["date"], body["time"], body["location"]
+        )
+        raise HTTPException(409, {
+            "message": "Trial slot is already booked",
+            "alternatives": alternatives,
+        }) from exc
     return {"booking_id": booking_id, "status": "booked"}
 
 
 @app.delete("/appointments/{appointment_id}")
 async def cancel_appt(appointment_id: str):
-    ok = await cancel_appointment(appointment_id)
+    ok = await cancel_trial(appointment_id)
     if not ok:
         raise HTTPException(404, "Appointment not found or already cancelled")
     return {"status": "cancelled"}

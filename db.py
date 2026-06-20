@@ -13,6 +13,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 # ── Env helpers ───────────────────────────────────────────────────────────────
 
@@ -226,6 +227,118 @@ async def clear_errors() -> None:
 
 
 # ── Appointments ──────────────────────────────────────────────────────────────
+
+TRIAL_LOCATIONS = ("ADAYAR", "ECR")
+TRIAL_SLOT_TIMES = (
+    "06:00", "07:00", "08:00", "09:00",
+    "16:30", "17:30", "18:30", "19:30",
+)
+
+
+class TrialSlotUnavailable(Exception):
+    pass
+
+
+def normalize_trial_location(location: str) -> str:
+    value = (location or "").strip().upper()
+    if value not in TRIAL_LOCATIONS:
+        raise ValueError("location must be ADAYAR or ECR")
+    return value
+
+
+def validate_trial_slot(date: str, time: str, location: str) -> tuple[str, str, str]:
+    location = normalize_trial_location(location)
+    try:
+        slot = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    except ValueError as exc:
+        raise ValueError("date and time must use YYYY-MM-DD and HH:MM") from exc
+    if slot.weekday() == 6:
+        raise ValueError("trial sessions are unavailable on Sundays")
+    if time not in TRIAL_SLOT_TIMES:
+        raise ValueError("time must be one of: " + ", ".join(TRIAL_SLOT_TIMES))
+    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    if slot <= now:
+        raise ValueError("trial slot must be in the future")
+    return date, time, location
+
+
+async def check_trial_slot(date: str, time: str, location: str) -> bool:
+    """One active one-hour trial is allowed per location/start time."""
+    date, time, location = validate_trial_slot(date, time, location)
+    db = await _adb()
+    result = await (
+        db.table("trials").select("id")
+        .eq("date", date).eq("time", time).eq("location", location)
+        .eq("status", "booked").limit(1).execute()
+    )
+    return not bool(result.data)
+
+
+async def get_next_available_trial_slots(
+    date: str, time: str, location: str, limit: int = 3,
+) -> list[str]:
+    """Return the next valid one-hour starts at the requested gym location."""
+    location = normalize_trial_location(location)
+    try:
+        requested = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        requested = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    start = max(requested, now)
+    found: list[str] = []
+    for day_offset in range(15):
+        day = (start + timedelta(days=day_offset)).date()
+        if day.weekday() == 6:
+            continue
+        for slot_time in TRIAL_SLOT_TIMES:
+            candidate = datetime.strptime(f"{day.isoformat()} {slot_time}", "%Y-%m-%d %H:%M")
+            if candidate <= start:
+                continue
+            if await check_trial_slot(day.isoformat(), slot_time, location):
+                found.append(f"{day.isoformat()} at {slot_time}")
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+async def insert_trial(name: str, phone: str, date: str, time: str, location: str) -> str:
+    date, time, location = validate_trial_slot(date, time, location)
+    full_id = str(uuid.uuid4())
+    booking_id = full_id[:8].upper()
+    db = await _adb()
+    try:
+        await db.table("trials").insert({
+            "id": full_id, "booking_id": booking_id,
+            "name": name.strip(), "phone": phone.strip(),
+            "date": date, "time": time, "location": location,
+            "duration_minutes": 60, "status": "booked",
+            "created_at": datetime.now().isoformat(),
+        }).execute()
+    except Exception as exc:
+        # The DB unique index is the final concurrency guard. Re-checking lets
+        # us distinguish a slot race from an unrelated database failure.
+        if not await check_trial_slot(date, time, location):
+            raise TrialSlotUnavailable("trial slot was just booked") from exc
+        raise
+    return booking_id
+
+
+async def get_all_trials(date_filter: Optional[str] = None) -> list:
+    db = await _adb()
+    query = db.table("trials").select("*").order("date").order("time")
+    if date_filter:
+        query = query.eq("date", date_filter)
+    result = await query.execute()
+    return result.data or []
+
+
+async def cancel_trial(trial_id: str) -> bool:
+    db = await _adb()
+    result = await (
+        db.table("trials").update({"status": "cancelled"})
+        .eq("id", trial_id).eq("status", "booked").execute()
+    )
+    return len(result.data or []) > 0
 
 async def insert_appointment(name: str, phone: str, date: str, time: str, service: str) -> str:
     full_id = str(uuid.uuid4())

@@ -13,6 +13,25 @@ CREATE TABLE IF NOT EXISTS appointments (
     created_at TEXT NOT NULL
 );
 
+-- One-hour trial bookings. Capacity is one trial per location/start time.
+CREATE TABLE IF NOT EXISTS trials (
+    id TEXT PRIMARY KEY,
+    booking_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    date TEXT NOT NULL,
+    time TEXT NOT NULL,
+    location TEXT NOT NULL CHECK (location IN ('ADAYAR', 'ECR')),
+    duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes = 60),
+    status TEXT NOT NULL DEFAULT 'booked' CHECK (status IN ('booked', 'cancelled')),
+    created_at TEXT NOT NULL
+);
+
+-- Partial uniqueness allows a cancelled slot to be booked again while making
+-- simultaneous booking attempts for the same live slot safe.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trials_booked_slot
+ON trials (location, date, time) WHERE status = 'booked';
+
 CREATE TABLE IF NOT EXISTS call_logs (
     id TEXT PRIMARY KEY,
     phone_number TEXT NOT NULL,
@@ -39,6 +58,7 @@ CREATE TABLE IF NOT EXISTS error_logs (
 );
 
 ALTER TABLE appointments  DISABLE ROW LEVEL SECURITY;
+ALTER TABLE trials        DISABLE ROW LEVEL SECURITY;
 ALTER TABLE call_logs     DISABLE ROW LEVEL SECURITY;
 ALTER TABLE settings      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE error_logs    DISABLE ROW LEVEL SECURITY;

@@ -44,10 +44,10 @@ STEP 4 — INVITE FOR TRIAL
 • Firm no → end_call(outcome='not_interested', reason='declined trial after pitch')
 
 STEP 5 — CHECK AVAILABILITY & BOOK
-"Wonderful! What day and time generally works for you? We have morning slots from 6 to 10 and evening slots 4:30 to 8:30, Monday to Saturday."
-• Always call check_availability(date, time) before confirming a slot
+"Wonderful! Would you prefer our ADAYAR or ECR location, and what day and time works for you? We have one-hour morning slots from 6 to 10 and evening slots 4:30 to 8:30, Monday to Saturday."
+• Always call check_availability(date, time, location) before confirming a slot
 • If unavailable → "That one's just been taken — how about [next available]?"
-• Once they confirm → call book_appointment(name, phone, date, time, "Trial Assessment")
+• Once they confirm every detail → call book_appointment(name, phone, date, time, location)
 • Then call send_sms_confirmation(phone, "Hi {lead_name}! Your free trial at Harry's Fitcamp is confirmed for [date] at [time]. We're at [location]. See you then! — Tina")
 
 STEP 6 — CLOSE
@@ -104,8 +104,8 @@ But honestly, let's not worry about that today — the trial is free and it's re
 
 ━━━ TOOL USAGE RULES ━━━
 
-• check_availability → ALWAYS before confirming a trial slot
-• book_appointment → only after verbal confirmation of date and time
+• check_availability → ALWAYS with date, time, and ADAYAR/ECR before confirming a trial slot
+• book_appointment → only after verbal confirmation of name, phone, location, date, and time
 • end_call → ALWAYS call this at call end — but NEVER hang up abruptly. First say a warm, natural sign-off (e.g. "Thank you so much for your time, {lead_name} — have a wonderful day!") and let it finish, THEN call end_call. Always close politely, even on a no/wrong number.
 • remember_details → any time the lead shares something useful
 """
@@ -138,8 +138,9 @@ Whatever they need, help naturally and conversationally:
   "Wonderful! I'd love to set you up with a free trial and assessment session — no obligation.
    What day and time generally works for you? We have morning slots 6 to 10 and evening 4:30 to 8:30,
    Monday to Saturday."
-  • Always call check_availability(date, time) before confirming.
-  • On confirm → book_appointment(name, phone, date, time, "Trial Assessment").
+  • Ask whether they prefer ADAYAR or ECR.
+  • Always call check_availability(date, time, location) before confirming.
+  • On confirm → book_appointment(name, phone, date, time, location).
   • Then send_sms_confirmation if available.
 
 • Asks about timings → "Classes run Monday to Friday, with Saturday make-up sessions. Mornings six to ten,
@@ -165,8 +166,8 @@ Whatever they need, help naturally and conversationally:
 • Hindi/English code-switching is completely fine — match the caller's comfort.
 
 ━━━ TOOL USAGE RULES ━━━
-• check_availability → ALWAYS before confirming a trial slot.
-• book_appointment → only after the caller confirms date and time.
+• check_availability → ALWAYS with date, time, and location before confirming a trial slot.
+• book_appointment → only after the caller confirms name, phone, ADAYAR/ECR, date, and time.
 • transfer_to_human → for anything you can't handle.
 • end_call → ALWAYS at the end, but NEVER hang up abruptly. First give a warm sign-off
   (e.g. "Thanks so much for calling, have a great day!") and let it finish, THEN call end_call.
@@ -188,12 +189,14 @@ DEFAULT_BUSINESS_CONTEXT = """\
   and perimenopausal women, and people needing injury rehabilitation with the in-house physiotherapist.
 • Hours: Monday–Friday, 6–10 AM and 4:30–8:30 PM; missed weekday sessions can be made up Saturday.
 • Trial: The trial and assessment session is free and carries no obligation.
+• Locations: Trial bookings are available at ADAYAR and ECR. Every trial lasts exactly one hour.
 • Memberships (only quote if asked): 3 months ₹35,000; 6 months ₹60,000; 1 year ₹80,000.
 """
 
 BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE HARRY'S FITCAMP FACTS ━━━"
 CALL_CONTROL_HEADING = "━━━ AUTHORITATIVE CALL ENDING RULES ━━━"
 CALLER_COMMUNICATION_HEADING = "━━━ AUTHORITATIVE CALLER COMMUNICATION RULES ━━━"
+TRIAL_BOOKING_HEADING = "━━━ AUTHORITATIVE TRIAL BOOKING RULES ━━━"
 
 
 def _attach_business_context(prompt: str) -> str:
@@ -243,6 +246,23 @@ def _attach_caller_communication_rules(prompt: str) -> str:
     )
 
 
+def _attach_trial_booking_rules(prompt: str) -> str:
+    """Make location and atomic availability checks mandatory in every prompt."""
+    if TRIAL_BOOKING_HEADING in prompt:
+        return prompt
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + TRIAL_BOOKING_HEADING
+        + "\nBefore booking, collect and verbally confirm: caller name, phone number, location (ADAYAR or ECR), "
+          "date, and start time. Every trial is exactly one hour, and each location can hold only one trial "
+          "per start time. ALWAYS call check_availability(date, time, location). If unavailable, present the "
+          "returned alternatives and wait for the caller to choose; never book an alternative without confirmation. "
+          "Only then call book_appointment(name, phone, date, time, location). Never claim a booking is confirmed "
+          "unless the tool returns 'BOOKING CONFIRMED'."
+    )
+
+
 def _fill_prompt_placeholders(
     template: str,
     lead_name: str,
@@ -280,7 +300,9 @@ def build_prompt(
     """Interpolate lead name into the prompt. business_name and service_type kept for API compatibility."""
     template = custom_prompt if custom_prompt else DEFAULT_SYSTEM_PROMPT
     prompt = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
-    return _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(prompt)))
+    return _attach_trial_booking_rules(
+        _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(prompt)))
+    )
 
 
 def build_inbound_prompt(
@@ -297,7 +319,9 @@ def build_inbound_prompt(
     if active_summaries and active_summaries.strip():
         out += ("\n\n━━━ CURRENTLY ACTIVE OFFERS / CAMPAIGNS (you may discuss any of these) ━━━\n"
                 + active_summaries.strip())
-    return _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(out)))
+    return _attach_trial_booking_rules(
+        _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(out)))
+    )
 
 
 # ── Campaign prompt generation & assembly ───────────────────────────────────────

@@ -8,7 +8,8 @@ from livekit import agents, api
 from livekit.agents import llm
 
 from db import (
-    check_slot, get_next_available, insert_appointment, log_call, log_error,
+    TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
+    insert_trial, log_call, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
 )
@@ -49,36 +50,52 @@ class AppointmentTools(llm.ToolContext):
         if not enabled:
             return all_methods
         name_map = {m.__name__: m for m in all_methods}
-        return [name_map[n] for n in enabled if n in name_map]
+        # Availability, atomic booking, and clean call termination are core
+        # behavior and must remain available regardless of profile filtering.
+        required = {"check_availability", "book_appointment", "end_call"}
+        selected = set(enabled) | required
+        return [method for method in all_methods if method.__name__ in selected]
 
     @llm.function_tool
-    async def check_availability(self, date: str, time: str) -> str:
+    async def check_availability(self, date: str, time: str, location: str) -> str:
         """
-        Check whether a date/time slot is available for booking.
-        Call this BEFORE attempting to book whenever the lead proposes a date/time.
-        date format: YYYY-MM-DD  |  time format: HH:MM (24-hour)
-        Returns 'available' or 'unavailable: next available slot is <slot>'.
+        Check a one-hour trial slot at a gym location before booking.
+        Call this after collecting date, time, and location.
+        location: ADAYAR or ECR | date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            if await check_slot(date, time):
-                return "available"
-            next_slot = await get_next_available(date, time)
-            return f"unavailable: next available slot is {next_slot}"
+            if await check_trial_slot(date, time, location):
+                return f"available: {date} at {time} in {location.upper()} for one hour"
+            alternatives = await get_next_available_trial_slots(date, time, location)
+            choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
+            return f"unavailable at {location.upper()}: suggest one of these next available times: {choices}"
+        except ValueError as exc:
+            return f"invalid trial request: {exc}. Ask the caller to correct it."
         except Exception as exc:
-            return "Unable to check availability right now — please suggest a date and I will confirm."
+            logger.error("Trial availability check failed: %s", exc)
+            return "Unable to check trial availability right now. Do not claim the slot is available."
 
     @llm.function_tool
-    async def book_appointment(self, name: str, phone: str, date: str, time: str, service: str) -> str:
+    async def book_appointment(self, name: str, phone: str, date: str, time: str, location: str) -> str:
         """
-        Book an appointment after the lead has verbally confirmed date, time, and service.
-        Call ONLY after the lead confirms all details.
-        name: lead's full name | phone: with country code | date: YYYY-MM-DD | time: HH:MM | service: type
+        Atomically book a one-hour trial after the caller confirms every detail.
+        location: ADAYAR or ECR | date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            booking_id = await insert_appointment(name, phone, date, time, service)
-            return f"Confirmed! Booking ID: {booking_id}. See you on {date} at {time} for {service}."
+            booking_id = await insert_trial(name, phone, date, time, location)
+            return (
+                f"BOOKING CONFIRMED. ID: {booking_id}. One-hour trial at "
+                f"{location.upper()} on {date} at {time}."
+            )
+        except TrialSlotUnavailable:
+            alternatives = await get_next_available_trial_slots(date, time, location)
+            choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
+            return f"NOT BOOKED: that slot was just taken. Ask the caller to choose from: {choices}."
+        except ValueError as exc:
+            return f"NOT BOOKED: {exc}. Ask the caller to correct the booking details."
         except Exception as exc:
-            return "Technical issue saving the booking. Our team will confirm shortly."
+            logger.error("Trial booking failed: %s", exc)
+            return "NOT BOOKED: technical issue saving the trial. Do not tell the caller it is confirmed."
 
     @llm.function_tool
     async def end_call(self, outcome: str, reason: str = "") -> str:

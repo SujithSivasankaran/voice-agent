@@ -413,17 +413,17 @@
 
 <!-- APPOINTMENTS -->
 <div class="page" id="page-appointments">
-  <h1>Appointments</h1>
-  <p class="subtitle">All booked appointments</p>
+  <h1>Trial Bookings</h1>
+  <p class="subtitle">One-hour trials at ADAYAR and ECR</p>
   <div class="search-bar">
     <input id="appt-date-filter" type="date" style="width:180px" onchange="loadAppointments()" />
     <button class="btn btn-outline btn-sm" onclick="document.getElementById('appt-date-filter').value=''; loadAppointments()">Clear</button>
-    <button class="btn btn-primary btn-sm" onclick="openAddApptModal()">+ Add Manual</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddApptModal()">+ Add Trial</button>
   </div>
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Time</th><th>Name</th><th>Phone</th><th>Service</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
         <tbody id="appt-body"></tbody>
       </table>
     </div>
@@ -538,17 +538,26 @@
 <!-- Add Appointment Modal -->
 <div class="modal-overlay" id="modal-appt">
   <div class="modal">
-    <h2>Add Appointment</h2>
+    <h2>Add Trial Booking</h2>
     <div class="form-grid">
       <div class="form-group"><label>Name *</label><input id="appt-name" /></div>
       <div class="form-group"><label>Phone *</label><input id="appt-phone" placeholder="+919876543210" /></div>
       <div class="form-group"><label>Date *</label><input id="appt-date" type="date" /></div>
-      <div class="form-group"><label>Time *</label><input id="appt-time" type="time" /></div>
-      <div class="form-group" style="grid-column:1/-1"><label>Service *</label><input id="appt-service" placeholder="trial assessment session" /></div>
+      <div class="form-group"><label>Location *</label>
+        <select id="appt-location"><option value="ADAYAR">ADAYAR</option><option value="ECR">ECR</option></select>
+      </div>
+      <div class="form-group"><label>One-hour Start Time *</label>
+        <select id="appt-time">
+          <option value="06:00">06:00</option><option value="07:00">07:00</option>
+          <option value="08:00">08:00</option><option value="09:00">09:00</option>
+          <option value="16:30">16:30</option><option value="17:30">17:30</option>
+          <option value="18:30">18:30</option><option value="19:30">19:30</option>
+        </select>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-appt')">Cancel</button>
-      <button class="btn btn-primary" onclick="createAppt()">Book Appointment</button>
+      <button class="btn btn-primary" onclick="createAppt()">Book Trial</button>
     </div>
   </div>
 </div>
@@ -559,7 +568,7 @@
     <h2 id="profile-modal-title">New Agent Profile</h2>
     <input type="hidden" id="profile-edit-id" />
     <div class="form-grid">
-      <div class="form-group" style="grid-column:1/-1"><label>Profile Name *</label><input id="pr-name" placeholder="Priya — Dental" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Profile Name *</label><input id="pr-name" placeholder="Tina — Dental" /></div>
       <div class="form-group"><label>Voice</label>
         <select id="pr-voice">
           <option value="Aoede">Aoede (F)</option>
@@ -640,7 +649,14 @@ async function responseError(response) {
   if (!text) return response.statusText || `Request failed (${response.status})`;
   try {
     const data = JSON.parse(text);
-    return data.detail || data.message || text;
+    const detail = data.detail || data.message;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object') {
+      const alternatives = Array.isArray(detail.alternatives) && detail.alternatives.length
+        ? ` Next available: ${detail.alternatives.join(', ')}` : '';
+      return (detail.message || JSON.stringify(detail)) + alternatives;
+    }
+    return text;
   } catch {
     return text;
   }
@@ -988,11 +1004,11 @@ async function loadAppointments() {
     const tbody = document.getElementById('appt-body');
     tbody.innerHTML = appts.map(a => `
       <tr>
-        <td>${a.date}</td><td>${a.time}</td><td>${a.name}</td><td>${a.phone}</td>
-        <td>${a.service}</td>
+        <td>${a.date}</td><td>${a.time}</td><td>${a.location}</td><td>${a.name}</td><td>${a.phone}</td>
+        <td>${a.duration_minutes} min</td>
         <td><span class="badge badge-${a.status}">${a.status}</span></td>
         <td>${a.status==='booked' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppt('${a.id}')">Cancel</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty-state">No appointments</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="8" class="empty-state">No trial bookings</td></tr>';
   } catch(e) { toast(e.message, false); }
 }
 
@@ -1004,14 +1020,14 @@ async function createAppt() {
     phone: document.getElementById('appt-phone').value.trim(),
     date: document.getElementById('appt-date').value,
     time: document.getElementById('appt-time').value,
-    service: document.getElementById('appt-service').value.trim(),
+    location: document.getElementById('appt-location').value,
   };
-  if (!body.name || !body.phone || !body.date || !body.time || !body.service) {
+  if (!body.name || !body.phone || !body.date || !body.time || !body.location) {
     toast('All fields are required', false); return;
   }
   try {
     const r = await api('/appointments', {method:'POST', body:JSON.stringify(body)});
-    toast('Appointment booked — ID: ' + r.booking_id);
+    toast('Trial booked — ID: ' + r.booking_id);
     closeModal('modal-appt');
     loadAppointments();
   } catch(e) { toast(e.message, false); }
