@@ -84,7 +84,7 @@ class AppointmentTools(llm.ToolContext):
     async def end_call(self, outcome: str, reason: str = "") -> str:
         """
         End the call and log the outcome. ALWAYS call this before the call ends.
-        outcome: 'booked' | 'not_interested' | 'wrong_number' | 'voicemail' | 'no_answer' | 'callback_requested'
+        outcome: 'booked' | 'completed' | 'not_interested' | 'wrong_number' | 'voicemail' | 'no_answer' | 'callback_requested'
         reason: brief description
         """
         duration = int(time.time() - self._call_start_time)
@@ -109,6 +109,25 @@ class AppointmentTools(llm.ToolContext):
             await asyncio.sleep(float(os.environ.get("END_CALL_DRAIN_SECONDS", "2.0")))
         except Exception:
             pass
+        # Force the SIP leg to hang up. Disconnecting only the local agent can
+        # leave the caller connected to an otherwise empty LiveKit room.
+        for participant in list(self.ctx.room.remote_participants.values()):
+            identity = getattr(participant, "identity", "") or ""
+            attributes = getattr(participant, "attributes", None) or {}
+            is_sip = identity.lower().startswith("sip_") or any(
+                str(key).lower().startswith("sip.") for key in attributes
+            )
+            if not is_sip:
+                continue
+            try:
+                await self.ctx.api.room.remove_participant(
+                    api.RoomParticipantIdentity(
+                        room=self.ctx.room.name,
+                        identity=identity,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to remove SIP participant %s: %s", identity, exc)
         try:
             await self.ctx.room.disconnect()
         except Exception:
@@ -118,13 +137,13 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:
         """
-        Transfer the call to a human agent via SIP REFER.
-        Call when lead requests a human, is angry, or has a complex issue.
+        Connect the caller with the Harry's Fitcamp team via SIP REFER.
+        Use when the caller requests the team, is angry, or has a complex issue.
         reason: why you're transferring
         """
         destination = os.environ.get("DEFAULT_TRANSFER_NUMBER", "")
         if not destination:
-            return "Transfer unavailable: no fallback number configured."
+            return "I can't connect the team right now. Please offer to take a message."
         if "@" not in destination:
             clean = destination.replace("tel:", "").replace("sip:", "")
             destination = f"sip:{clean}@{self._sip_domain}" if self._sip_domain else f"tel:{clean}"
@@ -136,7 +155,7 @@ class AppointmentTools(llm.ToolContext):
                 participant_identity = p.identity
                 break
         if not participant_identity:
-            return "Transfer failed: could not identify caller."
+            return "I couldn't connect the team right now. Please apologize and offer to take a message."
         try:
             await self.ctx.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
@@ -145,9 +164,9 @@ class AppointmentTools(llm.ToolContext):
                     transfer_to=destination, play_dialtone=False,
                 )
             )
-            return "Transferring you to a human agent now. Please hold."
+            return "Connecting you with our team now. Please hold."
         except Exception as exc:
-            return "Transfer failed. Please call us back directly."
+            return "I couldn't connect the team right now. Please apologize and offer to take a message."
 
     @llm.function_tool
     async def send_sms_confirmation(self, phone: str, message: str) -> str:

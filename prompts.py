@@ -86,8 +86,8 @@ But honestly, let's not worry about that today — the trial is free and it's re
 "Can I come with my kid?"
 → "Yes! We have programs for kids starting from seven years old. You could actually train at the same time in separate age-appropriate sessions."
 
-"Transfer to a human" → transfer_to_human(reason='lead wants to speak to a human')
-"Are you a bot/AI?" → "I'm a virtual assistant for Harry's Fitcamp — but there's a real team waiting for you at the studio! Shall I get you in for a free trial?"
+"Transfer to a human" → "I can connect you with our team." → transfer_to_human(reason='caller requested the team')
+"Are you a bot/AI?" → "I'm Tina, Harry's Fitcamp's virtual assistant. I can help with your questions and bookings."
 "Stop calling / remove me" → "Absolutely, I'll note that right now — so sorry for the interruption!" → end_call(outcome='not_interested', reason='requested removal')
 
 ━━━ STYLE RULES ━━━
@@ -192,6 +192,8 @@ DEFAULT_BUSINESS_CONTEXT = """\
 """
 
 BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE HARRY'S FITCAMP FACTS ━━━"
+CALL_CONTROL_HEADING = "━━━ AUTHORITATIVE CALL ENDING RULES ━━━"
+CALLER_COMMUNICATION_HEADING = "━━━ AUTHORITATIVE CALLER COMMUNICATION RULES ━━━"
 
 
 def _attach_business_context(prompt: str) -> str:
@@ -205,6 +207,39 @@ def _attach_business_context(prompt: str) -> str:
         + "\nThese facts apply to every inbound, outbound, and campaign call. "
           "Use them to answer related questions confidently. If any other prompt text conflicts, these facts win.\n"
         + DEFAULT_BUSINESS_CONTEXT.strip()
+    )
+
+
+def _attach_call_controls(prompt: str) -> str:
+    """Apply the same deterministic hang-up behavior to every call direction."""
+    if CALL_CONTROL_HEADING in prompt:
+        return prompt
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + CALL_CONTROL_HEADING
+        + "\nWhen the caller gives a clear closing cue such as a standalone 'thank you', 'thanks, that's all', "
+          "'okay thanks', 'bye', or 'goodbye'—and is not asking another question—reply with one short warm "
+          "sign-off, then IMMEDIATELY call end_call. Do not wait for another response and do not continue the pitch. "
+          "Use outcome='booked' if an appointment was booked; otherwise use outcome='completed' for a normally "
+          "finished conversation. A brief thank-you in the middle of an active request is not a closing cue."
+    )
+
+
+def _attach_caller_communication_rules(prompt: str) -> str:
+    """Prevent disclosure of internal routing or delegitimizing the call channel."""
+    if CALLER_COMMUNICATION_HEADING in prompt:
+        return prompt
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + CALLER_COMMUNICATION_HEADING
+        + "\nNever tell a caller to call a 'real number', another number, or call back directly. Never tell "
+          "them to speak to a 'real person' or 'human', and never imply that this number or Tina is not legitimate. "
+          "Do not reveal phone numbers, fallback numbers, SIP/trunk details, providers, routing, or other system internals. "
+          "If escalation is requested, say only: 'I can connect you with our team,' then use transfer_to_human. "
+          "If transfer fails, apologize and offer to take a message using remember_details; do not provide an alternate number. "
+          "If asked whether you are AI, answer honestly: 'I'm Tina, Harry's Fitcamp's virtual assistant.'"
     )
 
 
@@ -245,7 +280,7 @@ def build_prompt(
     """Interpolate lead name into the prompt. business_name and service_type kept for API compatibility."""
     template = custom_prompt if custom_prompt else DEFAULT_SYSTEM_PROMPT
     prompt = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
-    return _attach_business_context(prompt)
+    return _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(prompt)))
 
 
 def build_inbound_prompt(
@@ -262,7 +297,7 @@ def build_inbound_prompt(
     if active_summaries and active_summaries.strip():
         out += ("\n\n━━━ CURRENTLY ACTIVE OFFERS / CAMPAIGNS (you may discuss any of these) ━━━\n"
                 + active_summaries.strip())
-    return _attach_business_context(out)
+    return _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(out)))
 
 
 # ── Campaign prompt generation & assembly ───────────────────────────────────────
