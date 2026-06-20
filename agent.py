@@ -254,7 +254,8 @@ async def entrypoint(ctx: agents.JobContext):
     trace_provider = setup_langfuse(trace_metadata)
     if trace_provider is not None:
         async def _flush_langfuse():
-            trace_provider.force_flush()
+            flushed = trace_provider.force_flush(timeout_millis=10_000)
+            logger.info("Langfuse final flush completed: %s", flushed)
         ctx.add_shutdown_callback(_flush_langfuse)
 
     await _log("info", f"Call starting — phone={phone_number} lead={lead_name}")

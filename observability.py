@@ -9,6 +9,30 @@ from typing import Any, Optional
 logger = logging.getLogger("outbound-observability")
 
 
+def langfuse_status() -> dict[str, Any]:
+    """Return secret-safe configuration diagnostics for the health endpoint."""
+    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
+    secret_key = os.environ.get("LANGFUSE_SECRET_KEY", "").strip()
+    host = (
+        os.environ.get("LANGFUSE_BASE_URL")
+        or os.environ.get("LANGFUSE_HOST")
+        or "https://cloud.langfuse.com"
+    ).strip().rstrip("/")
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # noqa: F401
+        from opentelemetry.sdk.trace import TracerProvider  # noqa: F401
+        dependencies_installed = True
+    except ImportError:
+        dependencies_installed = False
+    return {
+        "configured": bool(public_key and secret_key),
+        "public_key_set": bool(public_key),
+        "secret_key_set": bool(secret_key),
+        "base_url": host,
+        "dependencies_installed": dependencies_installed,
+    }
+
+
 def setup_langfuse(metadata: dict[str, Any]) -> Optional[Any]:
     """Configure LiveKit OTEL export when Langfuse credentials are present."""
     public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
@@ -19,7 +43,12 @@ def setup_langfuse(metadata: dict[str, Any]) -> Optional[Any]:
         or "https://cloud.langfuse.com"
     ).strip().rstrip("/")
     if not public_key or not secret_key:
-        logger.info("Langfuse disabled (LANGFUSE_PUBLIC_KEY/SECRET_KEY not configured)")
+        logger.warning(
+            "Langfuse disabled (public_key_set=%s, secret_key_set=%s, base_url=%s)",
+            bool(public_key),
+            bool(secret_key),
+            host,
+        )
         return None
 
     try:
@@ -36,7 +65,19 @@ def setup_langfuse(metadata: dict[str, Any]) -> Optional[Any]:
         provider = TracerProvider()
         provider.add_span_processor(BatchSpanProcessor(exporter))
         set_tracer_provider(provider, metadata=metadata)
-        logger.info("Langfuse tracing enabled")
+
+        # Emit and flush a tiny root span immediately. This makes configuration
+        # failures visible during the call instead of waiting for shutdown.
+        tracer = provider.get_tracer("outbound-ai.langfuse-check")
+        with tracer.start_as_current_span("langfuse-export-check") as span:
+            span.set_attribute("langfuse.observation.type", "span")
+            span.set_attribute("langfuse.observation.metadata.room", metadata.get("call.room", ""))
+        flushed = provider.force_flush(timeout_millis=10_000)
+        logger.info(
+            "Langfuse tracing enabled (endpoint=%s, initial_flush=%s)",
+            f"{host}/api/public/otel/v1/traces",
+            flushed,
+        )
         return provider
     except Exception as exc:
         # Observability must never prevent a call from running.

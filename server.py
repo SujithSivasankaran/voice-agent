@@ -38,6 +38,7 @@ from db import (
     get_all_agent_profiles, get_agent_profile, get_default_agent_profile, create_agent_profile,
     update_agent_profile, delete_agent_profile, set_default_agent_profile,
 )
+from observability import langfuse_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-server")
@@ -349,7 +350,11 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "langfuse": langfuse_status(),
+    }
 
 
 # ── Single call ───────────────────────────────────────────────────────────────
