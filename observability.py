@@ -119,6 +119,7 @@ def record_call_usage(
         "total_input": total_input,
         "total_output": total_output,
     }
+    logger.info("Gemini usage breakdown: %s", json.dumps(usage, sort_keys=True))
 
     try:
         tracer = provider.get_tracer("outbound-ai.call-cost")

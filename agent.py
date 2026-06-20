@@ -252,11 +252,6 @@ async def entrypoint(ctx: agents.JobContext):
         "campaign.name": str(meta.get("campaign_name") or ""),
     }
     trace_provider = setup_langfuse(trace_metadata)
-    if trace_provider is not None:
-        async def _flush_langfuse():
-            flushed = trace_provider.force_flush(timeout_millis=10_000)
-            logger.info("Langfuse final flush completed: %s", flushed)
-        ctx.add_shutdown_callback(_flush_langfuse)
 
     await _log("info", f"Call starting — phone={phone_number} lead={lead_name}")
 
@@ -438,6 +433,12 @@ async def entrypoint(ctx: agents.JobContext):
         )
         if estimated_cost is not None:
             logger.info("Estimated Gemini cost for %s: $%.6f", ctx.room.name, estimated_cost)
+        # Flush while the job process and exporter worker are still alive.
+        # A LiveKit shutdown callback runs too late: OTEL's atexit handler may
+        # already have stopped the BatchSpanProcessor by then.
+        if trace_provider is not None:
+            flushed = trace_provider.force_flush(timeout_millis=10_000)
+            logger.info("Langfuse call flush completed: %s", flushed)
         try:
             await ctx.room.disconnect()
         except Exception:
