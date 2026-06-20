@@ -108,7 +108,7 @@ def _build_session(
     2. ContextWindowCompressionConfig          — sliding window, prevents freeze
     3. RealtimeInputConfig(END_SENSITIVITY_LOW) — less aggressive VAD, 2s silence
     """
-    gemini_model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+    gemini_model = model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
     gemini_voice = voice or os.environ.get("GEMINI_TTS_VOICE", "Aoede")
     use_realtime = os.environ.get("USE_GEMINI_REALTIME", "true").lower() != "false"
 
@@ -120,9 +120,9 @@ def _build_session(
             from google.genai import types as _gt
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
-                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_LOW,
-                    silence_duration_ms=600,
-                    prefix_padding_ms=200,
+                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
+                    silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "400")),
+                    prefix_padding_ms=100,
                 ),
             )
             _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
@@ -297,12 +297,18 @@ async def entrypoint(ctx: agents.JobContext):
     # Prefer a fixed greeting via say() so the agent speaks instantly on pickup —
     # no LLM generation/warmup and no pre-greeting tool call. Fall back to
     # generate_reply() if say() is unsupported by the realtime model.
+    # On 3.1 realtime, say()/generate_reply are not supported — the agent simply
+    # responds reactively when the callee speaks. Both attempts are wrapped so a
+    # model that ignores them can never crash the call.
     greeting = f"Hi, am I speaking with {lead_name}?"
     try:
         await session.say(greeting, allow_interruptions=True)
     except Exception as exc:
-        logger.warning("say() opening failed (%s) — falling back to generate_reply", exc)
-        await session.generate_reply(instructions=f"Start immediately: '{greeting}'")
+        logger.warning("say() opening unsupported (%s) — trying generate_reply", exc)
+        try:
+            await session.generate_reply(instructions=f"Start immediately: '{greeting}'")
+        except Exception as exc2:
+            logger.info("generate_reply opening unsupported (%s) — agent will reply reactively", exc2)
 
     # ── Wait for the room to close (SIP participant hangs up) ─────────────────
     # We listen for the room's "disconnected" event rather than calling
