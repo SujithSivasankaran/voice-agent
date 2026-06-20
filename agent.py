@@ -77,9 +77,14 @@ except ImportError:
     logger.warning("livekit-plugins-google not installed")
 
 _deepgram_stt = None
+_deepgram_tts = None
 try:
     from livekit.plugins import deepgram as _dg
     _deepgram_stt = _dg.STT
+    try:
+        _deepgram_tts = _dg.TTS
+    except AttributeError:
+        pass
 except ImportError:
     pass
 
@@ -103,7 +108,7 @@ def _build_session(
     2. ContextWindowCompressionConfig          — sliding window, prevents freeze
     3. RealtimeInputConfig(END_SENSITIVITY_LOW) — less aggressive VAD, 2s silence
     """
-    gemini_model = model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    gemini_model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
     gemini_voice = voice or os.environ.get("GEMINI_TTS_VOICE", "Aoede")
     use_realtime = os.environ.get("USE_GEMINI_REALTIME", "true").lower() != "false"
 
@@ -148,11 +153,32 @@ def _build_session(
             "Run: pip install 'livekit-plugins-google>=1.0'"
         )
 
-    logger.info("SESSION: pipeline (Deepgram STT + Gemini LLM + Google TTS)")
+    # ── Pipeline: STT + LLM + TTS ─────────────────────────────────────────────
+    # Used when USE_GEMINI_REALTIME=false. Unlike the realtime Live models, this
+    # path produces smooth audio AND supports say()/generate_reply, so the agent
+    # greets reliably. Needs DEEPGRAM_API_KEY; the LLM uses the AI Studio key.
+    pipeline_llm_model = os.environ.get("PIPELINE_LLM_MODEL", "gemini-2.5-flash")
+    logger.info("SESSION: pipeline (Deepgram STT + Gemini LLM %s + TTS)", pipeline_llm_model)
+
     stt = _deepgram_stt(model="nova-3", language="multi") if _deepgram_stt else None
-    tts = _google_tts() if _google_tts else None
+
+    # TTS provider: 'deepgram' (default — same key as STT) or 'google'
+    # (en-IN Indian voices, but needs a Google Cloud service account).
+    tts_provider = os.environ.get("TTS_PROVIDER", "deepgram").lower()
+    tts = None
+    if tts_provider == "google" and _google_tts:
+        try:
+            tts = _google_tts(
+                language=os.environ.get("TTS_LANGUAGE", "en-IN"),
+                voice_name=os.environ.get("TTS_VOICE", "en-IN-Neural2-A"),
+            )
+        except Exception as exc:
+            logger.warning("Google TTS init failed (%s) — falling back to Deepgram", exc)
+    if tts is None and _deepgram_tts:
+        tts = _deepgram_tts(model=os.environ.get("DEEPGRAM_TTS_MODEL", "aura-asteria-en"))
+
     vad = silero.VAD.load()
-    return AgentSession(stt=stt, llm=_google_llm(model=gemini_model), tts=tts, vad=vad)
+    return AgentSession(stt=stt, llm=_google_llm(model=pipeline_llm_model), tts=tts, vad=vad)
 
 
 # ── Main entrypoint ───────────────────────────────────────────────────────────
