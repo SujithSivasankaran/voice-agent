@@ -267,10 +267,22 @@ Return ONLY the full revised call script as plain text — no JSON, no markdown 
 """
 
 
-def assemble_outbound_prompt(campaign_prompt: str, other_summaries: str = "") -> str:
-    """Outbound: the campaign's own generated script, plus brief knowledge of other
-    active offers so the agent can still field off-topic questions."""
-    base = (campaign_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
+def assemble_outbound_prompt(
+    campaign_prompt: str,
+    other_summaries: str = "",
+    default_prompt: str = "",
+) -> str:
+    """Build a campaign-first outbound prompt with full supporting context."""
+    campaign = (campaign_prompt or "").strip()
+    default = (default_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
+    base = """━━━ PRIORITY AND SCOPE ━━━
+This is a CAMPAIGN CALL. The primary campaign below is the reason for the call and must drive the opening, conversation flow, and desired outcome.
+Use the default business information and other active campaign summaries as supporting knowledge when the caller asks a related question. Do not proactively pitch another campaign or let supporting information replace the primary campaign flow. If instructions conflict, the primary campaign wins.
+
+━━━ PRIMARY CAMPAIGN — MAIN CALL FLOW ━━━
+""" + (campaign or default)
+    if campaign and default:
+        base += "\n\n━━━ DEFAULT BUSINESS INFORMATION AND GENERAL RULES — SUPPORTING CONTEXT ━━━\n" + default
     if other_summaries and other_summaries.strip():
         base += ("\n\n━━━ OTHER CURRENT OFFERS (only mention if the caller asks) ━━━\n"
                  + other_summaries.strip())

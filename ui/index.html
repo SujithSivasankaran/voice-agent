@@ -348,10 +348,13 @@
         <div class="form-group"><label>Agent Profile</label>
           <select id="sc-profile"><option value="">— Default —</option></select>
         </div>
+        <div class="form-group"><label>Campaign</label>
+          <select id="sc-campaign"><option value="">— Default prompt —</option></select>
+        </div>
       </div>
       <div class="form-group" style="margin-top:16px">
-        <label>Custom System Prompt (leave blank to use profile/default)</label>
-        <textarea id="sc-prompt" placeholder="Optional: override the AI instructions for this call..."></textarea>
+        <label>Additional Call Instructions (optional)</label>
+        <textarea id="sc-prompt" placeholder="Optional: add instructions for this call. The selected campaign remains the primary flow."></textarea>
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="dispatchSingleCall()">📞 Call Now</button>
@@ -375,6 +378,9 @@
         <div class="form-group"><label>Delay Between Calls (sec)</label><input id="bk-delay" type="number" value="3" min="0" /></div>
         <div class="form-group"><label>Agent Profile</label>
           <select id="bk-profile"><option value="">— Default —</option></select>
+        </div>
+        <div class="form-group"><label>Campaign</label>
+          <select id="bk-campaign"><option value="">— Default prompt —</option></select>
         </div>
       </div>
       <div class="btn-row">
@@ -526,28 +532,7 @@
 <div class="modal-overlay" id="modal-campaign">
   <div class="modal">
     <h2>New Campaign</h2>
-    <div class="form-grid">
-      <div class="form-group" style="grid-column:1/-1"><label>Campaign Name *</label><input id="cmp-name" placeholder="June Dental Campaign" /></div>
-      <div class="form-group"><label>Schedule</label>
-        <select id="cmp-schedule">
-          <option value="once">Run Once (immediately)</option>
-          <option value="daily">Daily</option>
-          <option value="weekdays">Weekdays (Mon–Fri)</option>
-        </select>
-      </div>
-      <div class="form-group"><label>Time (for daily/weekdays)</label><input id="cmp-time" type="time" value="09:00" /></div>
-      <div class="form-group"><label>Delay Between Calls (sec)</label><input id="cmp-delay" type="number" value="3" min="0" /></div>
-      <div class="form-group"><label>Agent Profile</label>
-        <select id="cmp-profile"><option value="">— Default —</option></select>
-      </div>
-    </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Upload Contacts CSV (phone, name [, service, business])</label>
-      <div class="drop-zone" style="padding:20px" onclick="document.getElementById('cmp-file').click()">
-        <div id="cmp-file-name">Click to select CSV</div>
-        <input type="file" id="cmp-file" accept=".csv" style="display:none" onchange="onCmpFileSelect(this)" />
-      </div>
-    </div>
+    <div class="form-group"><label>Campaign Name *</label><input id="cmp-name" placeholder="June Dental Campaign" /></div>
     <div class="form-group" style="margin-top:14px">
       <label>Campaign Purpose ✨</label>
       <textarea id="cmp-purpose" rows="4" placeholder="Describe in plain English what this campaign is about — e.g. 'Offer a free dental check-up this June and book interested people for a slot.' The AI will write the call script from this."></textarea>
@@ -651,13 +636,24 @@ const API = '';  // same origin
 async function api(path, opts={}) {
   const r = await fetch(API + path, {
     headers: {'Content-Type': 'application/json'},
+    cache: 'no-store',
     ...opts,
   });
   if (!r.ok) {
-    const err = await r.text();
-    throw new Error(err || r.statusText);
+    throw new Error(await responseError(r));
   }
   return r.json();
+}
+
+async function responseError(response) {
+  const text = await response.text();
+  if (!text) return response.statusText || `Request failed (${response.status})`;
+  try {
+    const data = JSON.parse(text);
+    return data.detail || data.message || text;
+  } catch {
+    return text;
+  }
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -684,7 +680,12 @@ document.querySelectorAll('nav a[data-page]').forEach(a => {
 
 function onPageLoad(page) {
   if (page === 'dashboard')      { loadDashboard(); }
-  if (page === 'new-call')       { loadProfilesIntoSelect('sc-profile'); loadProfilesIntoSelect('bk-profile'); }
+  if (page === 'new-call')       {
+    loadProfilesIntoSelect('sc-profile');
+    loadProfilesIntoSelect('bk-profile');
+    loadCampaignsIntoSelect('sc-campaign');
+    loadCampaignsIntoSelect('bk-campaign');
+  }
   if (page === 'campaigns')      { loadCampaigns(); loadDefaultPrompt(); }
   if (page === 'appointments')   { loadAppointments(); }
   if (page === 'call-logs')      { loadCalls(1); }
@@ -827,6 +828,7 @@ async function dispatchSingleCall() {
         service_type: document.getElementById('sc-service').value.trim() || 'trial assessment session',
         system_prompt: document.getElementById('sc-prompt').value.trim(),
         agent_profile_id: document.getElementById('sc-profile').value,
+        campaign_id: document.getElementById('sc-campaign').value,
       }),
     });
     toast('Call dispatched to ' + phone);
@@ -848,8 +850,10 @@ async function dispatchBatch() {
   fd.append('service_type', document.getElementById('bk-service').value || 'trial assessment session');
   fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
   fd.append('agent_profile_id', document.getElementById('bk-profile').value || '');
+  fd.append('campaign_id', document.getElementById('bk-campaign').value || '');
   try {
     const r = await fetch('/call/batch', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await responseError(r));
     const data = await r.json();
     document.getElementById('batch-results').innerHTML = `
       <div class="card" style="margin-top:0">
@@ -870,45 +874,44 @@ dz.addEventListener('drop', e => {
 });
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
-let cmpFile = null;
-function onCmpFileSelect(input) {
-  cmpFile = input.files[0];
-  document.getElementById('cmp-file-name').textContent = cmpFile ? '✔ ' + cmpFile.name : 'Click to select CSV';
+async function loadCampaignsIntoSelect(selectId) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  try {
+    const campaigns = await api('/campaigns');
+    select.innerHTML = '<option value="">— Default prompt —</option>';
+    campaigns.filter(c => c.status === 'active').forEach(c => {
+      const option = document.createElement('option');
+      option.value = c.id;
+      option.textContent = c.name + (c.system_prompt ? '' : ' (script not ready)');
+      option.disabled = !c.system_prompt;
+      select.appendChild(option);
+    });
+  } catch(e) {
+    toast('Could not load campaigns: ' + e.message, false);
+  }
 }
 
 function openNewCampaignModal() {
-  cmpFile = null;
-  document.getElementById('cmp-file-name').textContent = 'Click to select CSV';
   document.getElementById('cmp-name').value = '';
   document.getElementById('cmp-purpose').value = '';
-  document.getElementById('cmp-schedule').value = 'once';
-  document.getElementById('cmp-time').value = '09:00';
-  document.getElementById('cmp-delay').value = '3';
-  loadProfilesIntoSelect('cmp-profile');
   openModal('modal-campaign');
 }
 
 async function createCampaign() {
   const name = document.getElementById('cmp-name').value.trim();
   if (!name) { toast('Campaign name is required', false); return; }
-  if (!cmpFile) { toast('Upload a CSV with contacts', false); return; }
 
   const purpose = document.getElementById('cmp-purpose').value.trim();
-  const fd = new FormData();
-  fd.append('file', cmpFile);
-  fd.append('name', name);
-  fd.append('purpose', purpose);
-  fd.append('schedule_type', document.getElementById('cmp-schedule').value);
-  fd.append('schedule_time', document.getElementById('cmp-time').value);
-  fd.append('call_delay_seconds', document.getElementById('cmp-delay').value);
-  fd.append('agent_profile_id', document.getElementById('cmp-profile').value || '');
 
   try {
-    const r = await fetch('/campaigns/upload', { method: 'POST', body: fd });
-    const data = await r.json();
-    toast(`Campaign created — ${data.contacts_loaded} contacts loaded${purpose ? ' · writing script…' : ''}`);
+    await api('/campaigns', {
+      method: 'POST',
+      body: JSON.stringify({ name, purpose, contacts: [], schedule_type: 'manual' }),
+    });
+    toast(`Campaign created${purpose ? ' — writing script…' : ''}`);
     closeModal('modal-campaign');
-    loadCampaigns();
+    await loadCampaigns();
   } catch(e) { toast('Create failed: ' + e.message, false); }
 }
 
@@ -938,20 +941,23 @@ async function loadCampaigns() {
       const status = c.prompt_status ? `<span style="font-size:11px;color:var(--muted)">${PS[c.prompt_status]||''}</span>` : '';
       const purpose = c.purpose ? `<div style="font-size:12.5px;color:var(--text);margin:6px 0 2px">🎯 ${c.purpose}</div>` : '';
       const summary = c.summary ? `<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:4px">“${c.summary}”</div>` : '';
+      const schedule = c.schedule_type === 'manual'
+        ? ''
+        : `${contacts} contacts &nbsp;·&nbsp; ${c.schedule_type} ${c.schedule_time ? '@ '+c.schedule_time : ''}<br>`;
       return `<div class="card" style="padding:20px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
             <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name} &nbsp; ${status}</div>
             ${purpose}${summary}
             <div style="color:var(--muted);font-size:12px;line-height:1.8;margin-top:6px">
-              ${contacts} contacts &nbsp;·&nbsp; ${c.schedule_type} ${c.schedule_time ? '@ '+c.schedule_time : ''}<br>
+              ${schedule}
               Dispatched: ${c.total_dispatched||0} &nbsp; Failed: ${c.total_failed||0}
               ${c.last_run_at ? ' &nbsp;·&nbsp; Last run: '+fmtTime(c.last_run_at) : ''}
             </div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span class="badge badge-${c.status}">${c.status}</span>
-            <button class="btn btn-success btn-sm" onclick="runCampaignNow('${c.id}')">▶ Run Now</button>
+            ${c.schedule_type === 'manual' ? '' : `<button class="btn btn-success btn-sm" onclick="runCampaignNow('${c.id}')">▶ Run Now</button>`}
             ${c.status==='active' ? `<button class="btn btn-outline btn-sm" onclick="setCampaignStatus('${c.id}','paused')">⏸ Pause</button>` : `<button class="btn btn-outline btn-sm" onclick="setCampaignStatus('${c.id}','active')">▶ Resume</button>`}
             <button class="btn btn-danger btn-sm" onclick="deleteCampaign('${c.id}')">🗑</button>
           </div>

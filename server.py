@@ -186,6 +186,31 @@ async def _regenerate_campaign(campaign_id: str) -> None:
 
 # ── Campaign runner ───────────────────────────────────────────────────────────
 
+async def _assemble_campaign_call_prompt(campaign: dict) -> str:
+    """Campaign-first prompt plus default business context and other active offers."""
+    from prompts import DEFAULT_SYSTEM_PROMPT, assemble_outbound_prompt
+
+    try:
+        default_prompt = await get_default_prompt() or DEFAULT_SYSTEM_PROMPT
+    except Exception:
+        default_prompt = DEFAULT_SYSTEM_PROMPT
+
+    try:
+        others = await get_active_campaigns()
+        other_summaries = "\n".join(
+            f"• {other.get('name')}: {other.get('summary')}"
+            for other in others
+            if other.get("id") != campaign.get("id") and other.get("summary")
+        )
+    except Exception:
+        other_summaries = ""
+
+    return assemble_outbound_prompt(
+        campaign.get("system_prompt"),
+        other_summaries,
+        default_prompt,
+    )
+
 async def _run_campaign(campaign_id: str) -> None:
     campaign = await get_campaign(campaign_id)
     if not campaign:
@@ -206,19 +231,8 @@ async def _run_campaign(campaign_id: str) -> None:
     delay = int(campaign.get("call_delay_seconds", 3))
     agent_profile_id = campaign.get("agent_profile_id")
 
-    # Assemble the outbound prompt: this campaign's script + short summaries of the
-    # OTHER active campaigns (so the agent can still field off-topic questions).
-    from prompts import assemble_outbound_prompt
-    try:
-        others = await get_active_campaigns()
-        other_summaries = "\n".join(
-            f"• {o.get('name')}: {o.get('summary')}"
-            for o in others if o.get("id") != campaign_id and o.get("summary")
-        )
-    except Exception:
-        other_summaries = ""
     base_prompt = campaign.get("system_prompt")
-    custom_prompt = assemble_outbound_prompt(base_prompt, other_summaries) if base_prompt else None
+    custom_prompt = await _assemble_campaign_call_prompt(campaign) if base_prompt else None
 
     dispatched = 0
     failed = 0
@@ -333,6 +347,20 @@ async def health():
 
 # ── Single call ───────────────────────────────────────────────────────────────
 
+async def _get_call_campaign(campaign_id: str) -> Optional[dict]:
+    """Validate a selected campaign and ensure it has a usable outbound script."""
+    if not campaign_id:
+        return None
+    campaign = await get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Selected campaign was not found")
+    if campaign.get("status") != "active":
+        raise HTTPException(409, "Selected campaign is not active")
+    if not campaign.get("system_prompt"):
+        raise HTTPException(409, "Selected campaign script is not ready yet")
+    campaign["call_prompt"] = await _assemble_campaign_call_prompt(campaign)
+    return campaign
+
 @app.post("/call/single")
 async def call_single(request: Request):
     body = await request.json()
@@ -342,13 +370,24 @@ async def call_single(request: Request):
     service      = body.get("service_type", "our service").strip()
     custom_p     = body.get("system_prompt", "")
     profile_id   = body.get("agent_profile_id", "")
+    campaign_id  = body.get("campaign_id", "")
 
     if not phone:
         raise HTTPException(400, "phone_number is required")
 
     meta: dict = {"business_name": business, "service_type": service}
+    campaign = await _get_call_campaign(campaign_id)
+    if campaign:
+        meta["campaign_id"] = campaign["id"]
+        meta["campaign_name"] = campaign["name"]
+        meta["system_prompt"] = campaign["call_prompt"]
     if custom_p:
-        meta["system_prompt"] = custom_p
+        if campaign:
+            meta["system_prompt"] += (
+                "\n\n━━━ ADDITIONAL CALL-SPECIFIC INSTRUCTIONS ━━━\n" + custom_p.strip()
+            )
+        else:
+            meta["system_prompt"] = custom_p
     if profile_id:
         meta["agent_profile_id"] = profile_id
 
@@ -368,6 +407,7 @@ async def call_batch(
     call_delay_seconds: int = Form(3),
     system_prompt: str = Form(""),
     agent_profile_id: str = Form(""),
+    campaign_id: str = Form(""),
 ):
     content = await file.read()
     text = content.decode("utf-8-sig")
@@ -376,6 +416,8 @@ async def call_batch(
 
     if not contacts:
         raise HTTPException(400, "CSV has no rows")
+
+    campaign = await _get_call_campaign(campaign_id)
 
     dispatched = 0
     failed = 0
@@ -390,8 +432,17 @@ async def call_batch(
             continue
 
         meta: dict = {"business_name": business_name, "service_type": service_type}
+        if campaign:
+            meta["campaign_id"] = campaign["id"]
+            meta["campaign_name"] = campaign["name"]
+            meta["system_prompt"] = campaign["call_prompt"]
         if system_prompt:
-            meta["system_prompt"] = system_prompt
+            if campaign:
+                meta["system_prompt"] += (
+                    "\n\n━━━ ADDITIONAL CALL-SPECIFIC INSTRUCTIONS ━━━\n" + system_prompt.strip()
+                )
+            else:
+                meta["system_prompt"] = system_prompt
         if agent_profile_id:
             meta["agent_profile_id"] = agent_profile_id
 
