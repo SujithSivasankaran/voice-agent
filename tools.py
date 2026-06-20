@@ -33,6 +33,9 @@ class AppointmentTools(llm.ToolContext):
         self._call_start_time = time.time()
         self._sip_domain = os.environ.get("VOBIZ_SIP_DOMAIN", "")
         self.recording_url: Optional[str] = None
+        # Set by the entrypoint after the AgentSession is built, so end_call can
+        # wait for the goodbye to finish playing before hanging up.
+        self.session = None
         super().__init__(tools=[])
 
     def build_tool_list(self, enabled: list) -> list:
@@ -93,6 +96,19 @@ class AppointmentTools(llm.ToolContext):
             )
         except Exception as exc:
             logger.error("Failed to log call: %s", exc)
+        # Let the spoken goodbye finish before hanging up so the call doesn't
+        # cut off mid-sentence. Wait for the current speech to play out if the
+        # session API supports it, then a short safety buffer.
+        try:
+            speech = getattr(self.session, "current_speech", None) if self.session else None
+            if speech is not None and hasattr(speech, "wait_for_playout"):
+                await speech.wait_for_playout()
+        except Exception:
+            pass
+        try:
+            await asyncio.sleep(float(os.environ.get("END_CALL_DRAIN_SECONDS", "2.0")))
+        except Exception:
+            pass
         try:
             await self.ctx.room.disconnect()
         except Exception:

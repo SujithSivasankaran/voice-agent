@@ -224,6 +224,10 @@ async def entrypoint(ctx: agents.JobContext):
     # ── Build and start session ───────────────────────────────────────────────
     session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
 
+    # Give tools a reference to the session so end_call can wait for the
+    # goodbye to finish playing before disconnecting.
+    tools_instance.session = session
+
     agent = Agent(instructions=system_prompt, tools=tool_list)
 
     await session.start(
