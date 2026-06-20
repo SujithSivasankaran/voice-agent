@@ -49,6 +49,37 @@ async def _log(level: str, msg: str, detail: str = "") -> None:
         pass
 
 
+async def _wait_for_sip_participant(ctx: "agents.JobContext", timeout: float = 15.0):
+    """Wait for the inbound caller's SIP participant to join the room and return
+    it (or None on timeout). Used for incoming calls, where the caller is the one
+    joining rather than us dialing out."""
+    for p in ctx.room.remote_participants.values():
+        return p
+    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+
+    @ctx.room.on("participant_connected")
+    def _on_join(p):
+        if not fut.done():
+            fut.set_result(p)
+
+    try:
+        return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+    except asyncio.TimeoutError:
+        return None
+
+
+def _caller_number(participant) -> str:
+    """Extract the caller's phone number from a SIP participant's attributes."""
+    attrs = getattr(participant, "attributes", None) or {}
+    num = (attrs.get("sip.phoneNumber") or attrs.get("sip.from")
+           or attrs.get("sip.from_number") or attrs.get("sip.trunkPhoneNumber") or "")
+    if not num:
+        ident = getattr(participant, "identity", "") or ""
+        if ident.startswith("sip_"):
+            num = ident.replace("sip_", "")
+    return num
+
+
 # ── Import Google plugin paths ────────────────────────────────────────────────
 
 _google_realtime = None
@@ -210,11 +241,25 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:
             logger.warning("Could not load agent profile %s: %s", agent_profile_id, exc)
 
-    # ── Build system prompt ───────────────────────────────────────────────────
-    system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
-
     # ── Connect to LiveKit room ───────────────────────────────────────────────
     await ctx.connect()
+
+    # ── Inbound call? (no outbound number means the caller dialled us) ─────────
+    # Inbound calls are routed here by a LiveKit dispatch rule; the caller's SIP
+    # participant joins the room instead of us dialing out.
+    is_inbound = not phone_number
+    if is_inbound:
+        caller = await _wait_for_sip_participant(ctx, timeout=15)
+        if caller is not None:
+            caller_num = _caller_number(caller)
+            if caller_num:
+                phone_number = caller_num
+            if getattr(caller, "name", ""):
+                lead_name = caller.name
+        await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
+
+    # ── Build system prompt ───────────────────────────────────────────────────
+    system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
 
     # ── Build tool set ────────────────────────────────────────────────────────
     enabled_tools  = meta.get("enabled_tools") or await get_enabled_tools()
@@ -243,7 +288,7 @@ async def entrypoint(ctx: agents.JobContext):
         "sip_" in p.identity for p in ctx.room.remote_participants.values()
     )
 
-    if phone_number and not sip_already_present:
+    if phone_number and not sip_already_present and not is_inbound:
         if not trunk_id:
             await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
         else:
