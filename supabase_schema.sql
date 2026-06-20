@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
 
+-- Campaign purpose → LLM-generated prompt + summary + cumulative feedback
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS purpose TEXT;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS feedback TEXT;          -- JSON array of {text, at}
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS prompt_status TEXT;     -- generating | ready | error
+
 ALTER TABLE appointments ADD COLUMN IF NOT EXISTS calcom_booking_uid TEXT;
 
 CREATE TABLE IF NOT EXISTS contact_memory (

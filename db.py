@@ -349,6 +349,7 @@ async def create_campaign(
     name: str, contacts_json: str, schedule_type: str = "once",
     schedule_time: str = "09:00", call_delay_seconds: int = 3,
     system_prompt: Optional[str] = None, agent_profile_id: Optional[str] = None,
+    purpose: Optional[str] = None,
 ) -> str:
     campaign_id = str(uuid.uuid4())
     db = await _adb()
@@ -362,8 +363,53 @@ async def create_campaign(
         row["system_prompt"] = system_prompt
     if agent_profile_id:
         row["agent_profile_id"] = agent_profile_id
+    if purpose:
+        row["purpose"] = purpose
+        # Pending generation if a purpose is given and no explicit prompt supplied.
+        row["prompt_status"] = "generating" if not system_prompt else "ready"
     await db.table("campaigns").insert(row).execute()
     return campaign_id
+
+
+async def get_active_campaigns() -> list:
+    """Active campaigns with their short summaries — used to build inbound/outbound scope."""
+    db = await _adb()
+    result = await (
+        db.table("campaigns").select("id, name, summary, status")
+        .eq("status", "active").execute()
+    )
+    return result.data or []
+
+
+async def update_campaign_generated(campaign_id: str, system_prompt: str, summary: str, status: str = "ready") -> None:
+    """Save the LLM-generated outbound script + short summary for a campaign."""
+    db = await _adb()
+    await db.table("campaigns").update({
+        "system_prompt": system_prompt, "summary": summary, "prompt_status": status,
+    }).eq("id", campaign_id).execute()
+
+
+async def set_campaign_prompt_status(campaign_id: str, status: str) -> None:
+    db = await _adb()
+    await db.table("campaigns").update({"prompt_status": status}).eq("id", campaign_id).execute()
+
+
+async def append_campaign_feedback(campaign_id: str, feedback: str) -> list:
+    """Append a feedback entry (cumulative) and return the full feedback list."""
+    import json
+    db = await _adb()
+    c = await get_campaign(campaign_id)
+    items: list = []
+    if c and c.get("feedback"):
+        try:
+            items = json.loads(c["feedback"])
+            if not isinstance(items, list):
+                items = []
+        except Exception:
+            items = []
+    items.append({"text": feedback, "at": datetime.now().isoformat()})
+    await db.table("campaigns").update({"feedback": json.dumps(items)}).eq("id", campaign_id).execute()
+    return items
 
 
 async def get_all_campaigns() -> list:

@@ -29,6 +29,8 @@ from db import (
     get_stats,
     create_campaign, get_all_campaigns, get_campaign, update_campaign_status,
     update_campaign_run_stats, delete_campaign,
+    get_active_campaigns, update_campaign_generated, set_campaign_prompt_status,
+    append_campaign_feedback,
     get_contact_memory, add_contact_memory,
     get_all_agent_profiles, get_agent_profile, create_agent_profile,
     update_agent_profile, delete_agent_profile, set_default_agent_profile,
@@ -99,6 +101,58 @@ async def _dispatch_call(phone: str, lead_name: str, meta: dict) -> bool:
         return False
 
 
+# ── Campaign prompt generation (background, LLM) ───────────────────────────────
+
+async def _generate_campaign_assets(name: str, purpose: str, feedback_items: list):
+    """Turn a campaign's purpose (+ cumulative feedback) into a full outbound script
+    and a short summary, via the LLM. Returns (prompt, summary) or (None, None)."""
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key or not purpose:
+        return None, None
+    from prompts import CAMPAIGN_GEN_INSTRUCTIONS, DEFAULT_SYSTEM_PROMPT
+    fb = "\n".join(f"- {f.get('text','')}" for f in (feedback_items or [])) or "(none yet)"
+    instr = CAMPAIGN_GEN_INSTRUCTIONS.format(
+        default_base=DEFAULT_SYSTEM_PROMPT[:2200], name=name, purpose=purpose, feedback=fb,
+    )
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.models.generate_content(model=model, contents=instr)
+        )
+        text = (resp.text or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end + 1])
+            return data.get("prompt"), data.get("summary")
+    except Exception as exc:
+        logger.error("Campaign prompt generation failed: %s", exc)
+        await log_error("server", f"Campaign prompt generation failed: {exc}", name, "error")
+    return None, None
+
+
+async def _regenerate_campaign(campaign_id: str) -> None:
+    """Background task: (re)generate a campaign's outbound prompt + summary."""
+    c = await get_campaign(campaign_id)
+    if not c or not c.get("purpose"):
+        return
+    await set_campaign_prompt_status(campaign_id, "generating")
+    feedback = []
+    if c.get("feedback"):
+        try:
+            feedback = json.loads(c["feedback"])
+        except Exception:
+            feedback = []
+    prompt, summary = await _generate_campaign_assets(c.get("name", ""), c.get("purpose", ""), feedback)
+    if prompt:
+        await update_campaign_generated(campaign_id, prompt, summary or "", "ready")
+        logger.info("Campaign %s prompt regenerated", campaign_id)
+    else:
+        await set_campaign_prompt_status(campaign_id, "error")
+
+
 # ── Campaign runner ───────────────────────────────────────────────────────────
 
 async def _run_campaign(campaign_id: str) -> None:
@@ -119,8 +173,22 @@ async def _run_campaign(campaign_id: str) -> None:
         contacts = []
 
     delay = int(campaign.get("call_delay_seconds", 3))
-    custom_prompt = campaign.get("system_prompt")
     agent_profile_id = campaign.get("agent_profile_id")
+
+    # Assemble the outbound prompt: this campaign's script + short summaries of the
+    # OTHER active campaigns (so the agent can still field off-topic questions).
+    from prompts import assemble_outbound_prompt
+    try:
+        others = await get_active_campaigns()
+        other_summaries = "\n".join(
+            f"• {o.get('name')}: {o.get('summary')}"
+            for o in others if o.get("id") != campaign_id and o.get("summary")
+        )
+    except Exception:
+        other_summaries = ""
+    base_prompt = campaign.get("system_prompt")
+    custom_prompt = assemble_outbound_prompt(base_prompt, other_summaries) if base_prompt else None
+
     dispatched = 0
     failed = 0
 
@@ -403,6 +471,7 @@ async def new_campaign(request: Request):
     contacts = body.get("contacts", [])
     contacts_json = json.dumps(contacts)
 
+    purpose = (body.get("purpose") or "").strip()
     cid = await create_campaign(
         name=name,
         contacts_json=contacts_json,
@@ -411,11 +480,16 @@ async def new_campaign(request: Request):
         call_delay_seconds=int(body.get("call_delay_seconds", 3)),
         system_prompt=body.get("system_prompt"),
         agent_profile_id=body.get("agent_profile_id"),
+        purpose=purpose or None,
     )
 
     campaign = await get_campaign(cid)
     if campaign:
         _schedule_campaign(campaign)
+
+    # If a purpose was given (and no explicit prompt), generate the script in the background.
+    if purpose and not body.get("system_prompt"):
+        asyncio.create_task(_regenerate_campaign(cid))
 
     return {"id": cid, "status": "created"}
 
@@ -429,6 +503,7 @@ async def upload_campaign(
     call_delay_seconds: int = Form(3),
     system_prompt: str = Form(""),
     agent_profile_id: str = Form(""),
+    purpose: str = Form(""),
 ):
     content = await file.read()
     text = content.decode("utf-8-sig")
@@ -456,11 +531,15 @@ async def upload_campaign(
         call_delay_seconds=call_delay_seconds,
         system_prompt=system_prompt or None,
         agent_profile_id=agent_profile_id or None,
+        purpose=(purpose or "").strip() or None,
     )
 
     campaign = await get_campaign(cid)
     if campaign:
         _schedule_campaign(campaign)
+
+    if purpose.strip() and not system_prompt:
+        asyncio.create_task(_regenerate_campaign(cid))
 
     return {"id": cid, "contacts_loaded": len(contacts), "status": "created"}
 
@@ -496,6 +575,21 @@ async def set_campaign_status(campaign_id: str, request: Request):
                 pass
 
     return {"status": status}
+
+
+@app.post("/campaigns/{campaign_id}/feedback")
+async def campaign_feedback(campaign_id: str, request: Request):
+    body = await request.json()
+    text = (body.get("feedback") or "").strip()
+    if not text:
+        raise HTTPException(400, "feedback is required")
+    c = await get_campaign(campaign_id)
+    if not c:
+        raise HTTPException(404, "Campaign not found")
+    await append_campaign_feedback(campaign_id, text)
+    # Regenerate the prompt in the background using purpose + all feedback so far.
+    asyncio.create_task(_regenerate_campaign(campaign_id))
+    return {"status": "feedback_received", "regenerating": True}
 
 
 @app.post("/campaigns/{campaign_id}/run")

@@ -545,8 +545,13 @@
       </div>
     </div>
     <div class="form-group" style="margin-top:14px">
-      <label>Custom System Prompt (optional)</label>
-      <textarea id="cmp-prompt" rows="4" placeholder="Leave blank to use default/profile prompt…"></textarea>
+      <label>Campaign Purpose ✨</label>
+      <textarea id="cmp-purpose" rows="3" placeholder="Describe in plain English what this campaign is about — e.g. 'Offer a free dental check-up this June and book interested people for a slot.' The AI will write the call script from this."></textarea>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">The agent's script is auto-generated from this and improves as you add feedback.</div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Custom System Prompt (advanced — overrides auto-generation)</label>
+      <textarea id="cmp-prompt" rows="3" placeholder="Leave blank to let the AI generate from the purpose above…"></textarea>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-campaign')">Cancel</button>
@@ -876,6 +881,7 @@ function openNewCampaignModal() {
   cmpFile = null;
   document.getElementById('cmp-file-name').textContent = 'Click to select CSV';
   document.getElementById('cmp-name').value = '';
+  document.getElementById('cmp-purpose').value = '';
   document.getElementById('cmp-prompt').value = '';
   document.getElementById('cmp-schedule').value = 'once';
   document.getElementById('cmp-time').value = '09:00';
@@ -889,9 +895,11 @@ async function createCampaign() {
   if (!name) { toast('Campaign name is required', false); return; }
   if (!cmpFile) { toast('Upload a CSV with contacts', false); return; }
 
+  const purpose = document.getElementById('cmp-purpose').value.trim();
   const fd = new FormData();
   fd.append('file', cmpFile);
   fd.append('name', name);
+  fd.append('purpose', purpose);
   fd.append('schedule_type', document.getElementById('cmp-schedule').value);
   fd.append('schedule_time', document.getElementById('cmp-time').value);
   fd.append('call_delay_seconds', document.getElementById('cmp-delay').value);
@@ -901,10 +909,22 @@ async function createCampaign() {
   try {
     const r = await fetch('/campaigns/upload', { method: 'POST', body: fd });
     const data = await r.json();
-    toast(`Campaign created — ${data.contacts_loaded} contacts loaded`);
+    toast(`Campaign created — ${data.contacts_loaded} contacts loaded${purpose ? ' · writing script…' : ''}`);
     closeModal('modal-campaign');
     loadCampaigns();
   } catch(e) { toast('Create failed: ' + e.message, false); }
+}
+
+async function submitCampaignFeedback(id) {
+  const el = document.getElementById('fb-' + id);
+  const text = (el && el.value.trim()) || '';
+  if (!text) { toast('Type some feedback first', false); return; }
+  try {
+    await api(`/campaigns/${id}/feedback`, { method: 'POST', body: JSON.stringify({ feedback: text }) });
+    toast('Feedback saved — rewriting the script…');
+    if (el) el.value = '';
+    loadCampaigns();
+  } catch(e) { toast(e.message, false); }
 }
 
 async function loadCampaigns() {
@@ -915,13 +935,18 @@ async function loadCampaigns() {
       el.innerHTML = '<div class="empty-state"><div class="ico">🚀</div><div>No campaigns yet — create one above</div></div>';
       return;
     }
+    const PS = { generating: '✨ Writing script…', ready: '✅ Script ready', error: '⚠️ Script failed' };
     el.innerHTML = camps.map(c => {
       const contacts = (() => { try { return JSON.parse(c.contacts_json || '[]').length; } catch { return '?'; } })();
-      return `<div class="card" style="padding:18px">
+      const status = c.prompt_status ? `<span style="font-size:11px;color:var(--muted)">${PS[c.prompt_status]||''}</span>` : '';
+      const purpose = c.purpose ? `<div style="font-size:12.5px;color:var(--text);margin:6px 0 2px">🎯 ${c.purpose}</div>` : '';
+      const summary = c.summary ? `<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:4px">“${c.summary}”</div>` : '';
+      return `<div class="card" style="padding:20px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
-          <div>
-            <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name}</div>
-            <div style="color:var(--muted);font-size:12px;line-height:1.8">
+          <div style="flex:1;min-width:220px">
+            <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name} &nbsp; ${status}</div>
+            ${purpose}${summary}
+            <div style="color:var(--muted);font-size:12px;line-height:1.8;margin-top:6px">
               ${contacts} contacts &nbsp;·&nbsp; ${c.schedule_type} ${c.schedule_time ? '@ '+c.schedule_time : ''}<br>
               Dispatched: ${c.total_dispatched||0} &nbsp; Failed: ${c.total_failed||0}
               ${c.last_run_at ? ' &nbsp;·&nbsp; Last run: '+fmtTime(c.last_run_at) : ''}
@@ -934,6 +959,10 @@ async function loadCampaigns() {
             <button class="btn btn-danger btn-sm" onclick="deleteCampaign('${c.id}')">🗑</button>
           </div>
         </div>
+        ${c.purpose ? `<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+          <input id="fb-${c.id}" placeholder="Feedback to improve this campaign's script… e.g. 'be more concise, mention the discount earlier'" style="flex:1" />
+          <button class="btn btn-outline btn-sm" onclick="submitCampaignFeedback('${c.id}')">💬 Apply Feedback</button>
+        </div>` : ''}
       </div>`;
     }).join('');
   } catch(e) { toast('Load campaigns error: ' + e.message, false); }

@@ -197,14 +197,62 @@ def build_inbound_prompt(
     business_name: str = "Harry's Fitcamp",
     service_type: str = "trial assessment session",
     custom_prompt: str = None,
+    active_summaries: str = "",
 ) -> str:
-    """Prompt for INCOMING calls. Falls back to a caller-specific custom prompt if provided."""
+    """Prompt for INCOMING calls. Default reception base + summaries of every
+    currently-active campaign, so the caller can ask about anything running."""
     template = custom_prompt if custom_prompt else INBOUND_SYSTEM_PROMPT
     try:
-        return template.format(
+        out = template.format(
             lead_name=lead_name,
             business_name=business_name,
             service_type=service_type,
         )
     except KeyError:
-        return template
+        out = template
+    if active_summaries and active_summaries.strip():
+        out += ("\n\n━━━ CURRENTLY ACTIVE OFFERS / CAMPAIGNS (you may discuss any of these) ━━━\n"
+                + active_summaries.strip())
+    return out
+
+
+# ── Campaign prompt generation & assembly ───────────────────────────────────────
+
+# Instruction template sent to the LLM to turn a campaign's plain-English purpose
+# (+ accumulated feedback) into a complete outbound call script and a short summary.
+CAMPAIGN_GEN_INSTRUCTIONS = """You are a prompt engineer for an outbound voice AI agent named Priya.
+Using the inputs below, write (1) a COMPLETE outbound call script for this one campaign, and
+(2) a short summary of what the campaign offers.
+
+── Reference: the company's default outbound script (match this style & tool usage) ──
+{default_base}
+
+── Campaign name ──
+{name}
+
+── Campaign purpose (what this campaign is about) ──
+{purpose}
+
+── Improvement feedback to incorporate (oldest first; honour the latest) ──
+{feedback}
+
+Rules for the call script:
+- Priya is warm, calm, speaks at a relaxed slightly-slower pace, short turns (1-2 sentences).
+- Open by confirming identity, then pursue THIS campaign's goal naturally.
+- Use tools where relevant: check_availability, book_appointment, send_sms_confirmation,
+  transfer_to_human, remember_details, and ALWAYS end_call with a warm sign-off (never hang up abruptly).
+- Stay focused on this campaign's purpose; keep it self-contained.
+
+Return ONLY valid JSON, no markdown, with exactly these keys:
+{{"prompt": "<the full outbound call script>", "summary": "<2-4 line plain-English summary of the offer for other agents to reference>"}}
+"""
+
+
+def assemble_outbound_prompt(campaign_prompt: str, other_summaries: str = "") -> str:
+    """Outbound: the campaign's own generated script, plus brief knowledge of other
+    active offers so the agent can still field off-topic questions."""
+    base = (campaign_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
+    if other_summaries and other_summaries.strip():
+        base += ("\n\n━━━ OTHER CURRENT OFFERS (only mention if the caller asks) ━━━\n"
+                 + other_summaries.strip())
+    return base

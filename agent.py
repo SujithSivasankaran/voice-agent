@@ -31,7 +31,7 @@ from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import noise_cancellation, silero
 
-from db import init_db, log_error, get_enabled_tools, get_agent_profile
+from db import init_db, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns
 from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
 
@@ -275,9 +275,20 @@ async def entrypoint(ctx: agents.JobContext):
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
     # ── Build system prompt ───────────────────────────────────────────────────
-    # Incoming calls use the inbound (reception) prompt; outgoing use the outreach prompt.
+    # Incoming calls use the inbound (reception) prompt + summaries of every active
+    # campaign (so callers can ask about anything running). Outgoing calls use the
+    # campaign script passed in via metadata, else the default outreach prompt.
     if is_inbound:
-        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt)
+        active_summaries = ""
+        try:
+            actives = await get_active_campaigns()
+            active_summaries = "\n".join(
+                f"• {a.get('name')}: {a.get('summary')}"
+                for a in actives if a.get("summary")
+            )
+        except Exception as exc:
+            logger.warning("Could not load active campaigns for inbound: %s", exc)
+        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt, active_summaries)
     else:
         system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
 
