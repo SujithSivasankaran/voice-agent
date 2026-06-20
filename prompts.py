@@ -174,6 +174,35 @@ Whatever they need, help naturally and conversationally:
 """
 
 
+def _fill_prompt_placeholders(
+    template: str,
+    lead_name: str,
+    business_name: str,
+    service_type: str,
+) -> str:
+    """Replace only supported fields; generated prompts may contain unrelated braces."""
+    clean_lead = lead_name.strip() if isinstance(lead_name, str) else ""
+    clean_service = service_type.strip() if isinstance(service_type, str) else ""
+    values = {
+        "lead_name": clean_lead or "there",
+        "business_name": "Harry's Fitcamp",
+        "service_type": clean_service or "our service",
+    }
+    out = template
+    for field, value in values.items():
+        # Handle common LLM-produced placeholder styles without interpreting any
+        # other braces that may legitimately appear in generated text.
+        for token in (
+            "{{" + field + "}}",
+            "{" + field + "}",
+            "<" + field + ">",
+            "[" + field + "]",
+            "[" + field.replace("_", " ").title() + "]",
+        ):
+            out = out.replace(token, value)
+    return out
+
+
 def build_prompt(
     lead_name: str = "there",
     business_name: str = "Harry's Fitcamp",
@@ -182,14 +211,7 @@ def build_prompt(
 ) -> str:
     """Interpolate lead name into the prompt. business_name and service_type kept for API compatibility."""
     template = custom_prompt if custom_prompt else DEFAULT_SYSTEM_PROMPT
-    try:
-        return template.format(
-            lead_name=lead_name,
-            business_name=business_name,
-            service_type=service_type,
-        )
-    except KeyError:
-        return template
+    return _fill_prompt_placeholders(template, lead_name, business_name, service_type)
 
 
 def build_inbound_prompt(
@@ -202,14 +224,7 @@ def build_inbound_prompt(
     """Prompt for INCOMING calls. Default reception base + summaries of every
     currently-active campaign, so the caller can ask about anything running."""
     template = custom_prompt if custom_prompt else INBOUND_SYSTEM_PROMPT
-    try:
-        out = template.format(
-            lead_name=lead_name,
-            business_name=business_name,
-            service_type=service_type,
-        )
-    except KeyError:
-        out = template
+    out = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
     if active_summaries and active_summaries.strip():
         out += ("\n\n━━━ CURRENTLY ACTIVE OFFERS / CAMPAIGNS (you may discuss any of these) ━━━\n"
                 + active_summaries.strip())

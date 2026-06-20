@@ -226,7 +226,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     phone_number     = meta.get("phone_number", "")
     lead_name        = meta.get("lead_name", "there")
-    business_name    = meta.get("business_name", "our company")
+    # Organisation identity is fixed and must not be overridden by call metadata.
+    business_name    = "Harry's Fitcamp"
     service_type     = meta.get("service_type", "our service")
     custom_prompt    = meta.get("system_prompt") or meta.get("custom_prompt")
     agent_profile_id = meta.get("agent_profile_id")

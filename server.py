@@ -251,8 +251,6 @@ async def _run_campaign(campaign_id: str) -> None:
             extra["agent_profile_id"] = agent_profile_id
         if contact.get("service"):
             extra["service_type"] = contact["service"]
-        if contact.get("business"):
-            extra["business_name"] = contact["business"]
 
         ok = await _dispatch_call(phone, name, extra)
         if ok:
@@ -364,10 +362,10 @@ async def _get_call_campaign(campaign_id: str) -> Optional[dict]:
 @app.post("/call/single")
 async def call_single(request: Request):
     body = await request.json()
-    phone        = body.get("phone_number", "").strip()
-    lead_name    = body.get("lead_name", "there").strip()
-    business     = body.get("business_name", "our company").strip()
-    service      = body.get("service_type", "our service").strip()
+    phone        = (body.get("phone_number") or "").strip()
+    lead_name    = (body.get("lead_name") or "").strip() or "there"
+    business     = "Harry's Fitcamp"
+    service      = (body.get("service_type") or "").strip() or "our service"
     custom_p     = body.get("system_prompt", "")
     profile_id   = body.get("agent_profile_id", "")
     campaign_id  = body.get("campaign_id", "")
@@ -402,7 +400,6 @@ async def call_single(request: Request):
 @app.post("/call/batch")
 async def call_batch(
     file: UploadFile = File(...),
-    business_name: str = Form("our company"),
     service_type: str = Form("our service"),
     call_delay_seconds: int = Form(3),
     system_prompt: str = Form(""),
@@ -425,13 +422,13 @@ async def call_batch(
 
     for row in contacts:
         phone = (row.get("phone") or row.get("phone_number") or "").strip()
-        name  = (row.get("name") or row.get("lead_name") or "there").strip()
+        name  = (row.get("name") or row.get("lead_name") or "").strip() or "there"
         if not phone:
             failed += 1
             results.append({"phone": "", "status": "skipped", "reason": "no phone"})
             continue
 
-        meta: dict = {"business_name": business_name, "service_type": service_type}
+        meta: dict = {"business_name": "Harry's Fitcamp", "service_type": service_type}
         if campaign:
             meta["campaign_id"] = campaign["id"]
             meta["campaign_name"] = campaign["name"]
@@ -598,8 +595,6 @@ async def upload_campaign(
             entry: dict = {"phone": phone, "name": nm}
             if row.get("service"):
                 entry["service"] = row["service"]
-            if row.get("business"):
-                entry["business"] = row["business"]
             contacts.append(entry)
 
     if not contacts:

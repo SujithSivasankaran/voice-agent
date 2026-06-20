@@ -343,7 +343,6 @@
       <div class="form-grid">
         <div class="form-group"><label>Phone Number *</label><input id="sc-phone" placeholder="+919876543210" /></div>
         <div class="form-group"><label>Lead Name</label><input id="sc-name" placeholder="Rahul Sharma" /></div>
-        <div class="form-group"><label>Business Name</label><input id="sc-business" placeholder="Harry's Fitcamp" /></div>
         <div class="form-group"><label>Service Type</label><input id="sc-service" placeholder="trial assessment session" /></div>
         <div class="form-group"><label>Agent Profile</label>
           <select id="sc-profile"><option value="">— Default —</option></select>
@@ -368,12 +367,11 @@
       <div class="drop-zone" id="batch-drop" onclick="document.getElementById('batch-file').click()">
         <div style="font-size:28px;margin-bottom:8px">📂</div>
         <div>Drop CSV here or click to browse</div>
-        <div style="font-size:11px;margin-top:6px;color:var(--muted)">Required: phone, name &nbsp;·&nbsp; Optional: service, business</div>
+        <div style="font-size:11px;margin-top:6px;color:var(--muted)">Required: phone, name &nbsp;·&nbsp; Optional: service</div>
         <input type="file" id="batch-file" accept=".csv" style="display:none" onchange="onBatchFileSelect(this)" />
       </div>
       <div id="batch-file-name" style="margin-top:10px;color:var(--muted);font-size:12px"></div>
       <div class="form-grid" style="margin-top:18px">
-        <div class="form-group"><label>Business Name</label><input id="bk-business" placeholder="Harry's Fitcamp" /></div>
         <div class="form-group"><label>Service Type</label><input id="bk-service" placeholder="trial assessment session" /></div>
         <div class="form-group"><label>Delay Between Calls (sec)</label><input id="bk-delay" type="number" value="3" min="0" /></div>
         <div class="form-group"><label>Agent Profile</label>
@@ -824,7 +822,6 @@ async function dispatchSingleCall() {
       body: JSON.stringify({
         phone_number: phone,
         lead_name: document.getElementById('sc-name').value.trim() || 'there',
-        business_name: document.getElementById('sc-business').value.trim() || "Harry's Fitcamp",
         service_type: document.getElementById('sc-service').value.trim() || 'trial assessment session',
         system_prompt: document.getElementById('sc-prompt').value.trim(),
         agent_profile_id: document.getElementById('sc-profile').value,
@@ -846,7 +843,6 @@ async function dispatchBatch() {
   if (!batchFile) { toast('Select a CSV file first', false); return; }
   const fd = new FormData();
   fd.append('file', batchFile);
-  fd.append('business_name', document.getElementById('bk-business').value || "Harry's Fitcamp");
   fd.append('service_type', document.getElementById('bk-service').value || 'trial assessment session');
   fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
   fd.append('agent_profile_id', document.getElementById('bk-profile').value || '');
