@@ -24,6 +24,7 @@ from db import (
     init_db, log_error,
     get_all_settings, save_settings, get_setting, set_setting,
     get_default_prompt, save_default_prompt,
+    get_default_feedback, append_default_feedback,
     get_errors, get_logs, clear_errors,
     insert_appointment, get_all_appointments, cancel_appointment,
     get_all_calls, update_call_notes, get_contacts, get_calls_by_phone,
@@ -132,6 +133,35 @@ async def _generate_campaign_assets(name: str, purpose: str, feedback_items: lis
         logger.error("Campaign prompt generation failed: %s", exc)
         await log_error("server", f"Campaign prompt generation failed: {exc}", name, "error")
     return None, None
+
+
+async def _regenerate_default_prompt() -> None:
+    """Revise the default base script from its cumulative feedback (background)."""
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return
+    feedback = await get_default_feedback()
+    if not feedback:
+        return
+    from prompts import DEFAULT_REVISE_INSTRUCTIONS, DEFAULT_SYSTEM_PROMPT
+    current = await get_default_prompt() or DEFAULT_SYSTEM_PROMPT
+    fb = "\n".join(f"- {f.get('text','')}" for f in feedback)
+    instr = DEFAULT_REVISE_INSTRUCTIONS.format(current=current, feedback=fb)
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.models.generate_content(model=model, contents=instr)
+        )
+        text = (resp.text or "").strip()
+        if text:
+            await save_default_prompt(text)
+            logger.info("Default prompt revised from feedback")
+    except Exception as exc:
+        logger.error("Default prompt revision failed: %s", exc)
+        await log_error("server", f"Default prompt revision failed: {exc}", "default", "error")
 
 
 async def _regenerate_campaign(campaign_id: str) -> None:
@@ -697,17 +727,30 @@ async def post_settings(request: Request):
 
 @app.get("/default-prompt")
 async def get_default_prompt_ep():
-    """The editable default base script — saved value, or the built-in fallback."""
+    """The default base script (read-only in the UI) + how much feedback it carries."""
     from prompts import DEFAULT_SYSTEM_PROMPT
     saved = await get_default_prompt()
-    return {"value": saved or DEFAULT_SYSTEM_PROMPT, "custom": bool(saved)}
+    feedback = await get_default_feedback()
+    return {"value": saved or DEFAULT_SYSTEM_PROMPT, "custom": bool(saved), "feedback_count": len(feedback)}
 
 
-@app.post("/default-prompt")
-async def set_default_prompt_ep(request: Request):
+@app.post("/default-prompt/feedback")
+async def default_prompt_feedback(request: Request):
     body = await request.json()
-    await save_default_prompt(str(body.get("value", "")))
-    return {"status": "saved"}
+    text = (body.get("feedback") or "").strip()
+    if not text:
+        raise HTTPException(400, "feedback is required")
+    await append_default_feedback(text)
+    asyncio.create_task(_regenerate_default_prompt())
+    return {"status": "feedback_received", "regenerating": True}
+
+
+@app.post("/default-prompt/reset")
+async def reset_default_prompt_ep():
+    """Clear the custom default + its feedback → fall back to the built-in script."""
+    await save_default_prompt("")
+    await set_setting("DEFAULT_PROMPT_FEEDBACK", "[]")
+    return {"status": "reset"}
 
 
 @app.get("/settings/{key}")

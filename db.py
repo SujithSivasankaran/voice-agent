@@ -130,12 +130,12 @@ async def save_settings(data: dict) -> None:
         await db.table("settings").upsert(rows, on_conflict="key").execute()
 
 
-async def get_default_prompt() -> Optional[str]:
-    """The editable default base script (Supabase-backed). None → use the
-    hardcoded DEFAULT_SYSTEM_PROMPT in prompts.py."""
+async def _setting_value(key: str) -> Optional[str]:
+    """Read a single settings value straight from Supabase (unlike get_setting,
+    which reads env vars only)."""
     db = await _adb()
     try:
-        r = await db.table("settings").select("value").eq("key", "DEFAULT_PROMPT").maybe_single().execute()
+        r = await db.table("settings").select("value").eq("key", key).maybe_single().execute()
         if r and r.data and r.data.get("value"):
             return r.data["value"]
     except Exception:
@@ -143,8 +143,34 @@ async def get_default_prompt() -> Optional[str]:
     return None
 
 
+async def get_default_prompt() -> Optional[str]:
+    """The default base script (Supabase-backed). None → use the hardcoded
+    DEFAULT_SYSTEM_PROMPT in prompts.py."""
+    return await _setting_value("DEFAULT_PROMPT")
+
+
 async def save_default_prompt(text: str) -> None:
     await set_setting("DEFAULT_PROMPT", text)
+
+
+async def get_default_feedback() -> list:
+    import json
+    raw = await _setting_value("DEFAULT_PROMPT_FEEDBACK")
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+async def append_default_feedback(text: str) -> list:
+    import json
+    items = await get_default_feedback()
+    items.append({"text": text, "at": datetime.now().isoformat()})
+    await set_setting("DEFAULT_PROMPT_FEEDBACK", json.dumps(items))
+    return items
 
 
 async def get_enabled_tools() -> list:

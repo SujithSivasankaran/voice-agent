@@ -390,20 +390,21 @@
   <h1>Campaigns</h1>
   <p class="subtitle">Describe a campaign's purpose and the AI writes the call script. Active campaigns are also available to inbound callers.</p>
 
-  <!-- Always-on default base script -->
+  <!-- Always-on default base script (feedback-driven, not directly editable) -->
   <div class="section-title">Default Script</div>
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
       <div>
         <div style="font-weight:600;font-size:15px">⭐ Default (always-on base)</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Used for any outbound call without a specific campaign, and as the foundation everywhere.</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Used for any outbound call without a specific campaign, and as the foundation everywhere. You don't edit it directly — give feedback and the AI refines it.</div>
       </div>
       <span id="default-status" style="font-size:11px;color:var(--muted)"></span>
     </div>
-    <textarea id="default-prompt" rows="10" placeholder="Loading…"></textarea>
-    <div class="btn-row">
-      <button class="btn btn-primary btn-sm" onclick="saveDefaultPrompt()">💾 Save Default</button>
-      <button class="btn btn-outline btn-sm" onclick="resetDefaultPrompt()">↩ Reset to Built-in</button>
+    <textarea id="default-prompt" rows="9" readonly style="background:var(--bg);color:var(--muted);cursor:default" placeholder="Loading…"></textarea>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input id="default-feedback" placeholder="Feedback to improve the default script… e.g. 'introduce yourself faster', 'sound less formal'" style="flex:1" />
+      <button class="btn btn-primary btn-sm" onclick="submitDefaultFeedback()">💬 Apply Feedback</button>
+      <button class="btn btn-outline btn-sm" onclick="resetDefaultPrompt()">↩ Reset</button>
     </div>
   </div>
 
@@ -1239,31 +1240,35 @@ async function loadProfilesIntoSelect(elId) {
   } catch {}
 }
 
-// ── Default Script (always-on base) ─────────────────────────────────────────────
-let _defaultPromptBuiltin = null;
+// ── Default Script (feedback-driven, read-only) ─────────────────────────────────
 async function loadDefaultPrompt() {
   const ta = document.getElementById('default-prompt');
   const st = document.getElementById('default-status');
   try {
     const d = await api('/default-prompt');
     ta.value = d.value || '';
-    if (st) st.textContent = d.custom ? 'Custom default in use' : 'Using built-in default';
+    if (st) st.textContent = d.custom
+      ? `Refined from ${d.feedback_count} feedback note${d.feedback_count===1?'':'s'}`
+      : 'Using built-in default';
   } catch(e) { if (st) st.textContent = 'Could not load'; }
 }
 
-async function saveDefaultPrompt() {
-  const val = document.getElementById('default-prompt').value;
+async function submitDefaultFeedback() {
+  const el = document.getElementById('default-feedback');
+  const text = (el && el.value.trim()) || '';
+  if (!text) { toast('Type some feedback first', false); return; }
   try {
-    await api('/default-prompt', { method:'POST', body: JSON.stringify({ value: val }) });
-    toast('Default script saved — applies to new calls');
-    loadDefaultPrompt();
+    await api('/default-prompt/feedback', { method:'POST', body: JSON.stringify({ feedback: text }) });
+    toast('Feedback saved — refining the default script…');
+    if (el) el.value = '';
+    setTimeout(loadDefaultPrompt, 4000);  // give the background rewrite a moment
   } catch(e) { toast(e.message, false); }
 }
 
 async function resetDefaultPrompt() {
-  if (!confirm('Reset to the built-in default script?')) return;
+  if (!confirm('Reset to the built-in default script? This clears all feedback applied to it.')) return;
   try {
-    await api('/default-prompt', { method:'POST', body: JSON.stringify({ value: '' }) });
+    await api('/default-prompt/reset', { method:'POST' });
     toast('Reset to built-in default');
     loadDefaultPrompt();
   } catch(e) { toast(e.message, false); }
