@@ -28,12 +28,13 @@ def _certifi_ssl(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
 ssl.create_default_context = _certifi_ssl
 
 from livekit import agents, api, rtc
-from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
 from db import init_db, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns, get_default_prompt
 from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
+from observability import record_call_usage, setup_langfuse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-agent")
@@ -242,6 +243,20 @@ async def entrypoint(ctx: agents.JobContext):
     agent_profile_id = meta.get("agent_profile_id")
     trunk_id         = meta.get("trunk_id") or os.environ.get("OUTBOUND_TRUNK_ID", "")
 
+    trace_metadata = {
+        "langfuse.session.id": ctx.room.name,
+        "langfuse.trace.name": "harrys-fitcamp-voice-call",
+        "call.direction": "outbound" if phone_number else "inbound",
+        "call.room": ctx.room.name,
+        "campaign.id": str(meta.get("campaign_id") or ""),
+        "campaign.name": str(meta.get("campaign_name") or ""),
+    }
+    trace_provider = setup_langfuse(trace_metadata)
+    if trace_provider is not None:
+        async def _flush_langfuse():
+            trace_provider.force_flush()
+        ctx.add_shutdown_callback(_flush_langfuse)
+
     await _log("info", f"Call starting — phone={phone_number} lead={lead_name}")
 
     # ── Load agent profile (no os.environ writes) ─────────────────────────────
@@ -371,6 +386,12 @@ async def entrypoint(ctx: agents.JobContext):
     session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
     tools_instance.session = session
     agent = Agent(instructions=system_prompt, tools=tool_list)
+    usage_collector = metrics.UsageCollector()
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(event):
+        metrics.log_metrics(event.metrics)
+        usage_collector.collect(event.metrics)
 
     try:
         await session.start(
@@ -402,6 +423,20 @@ async def entrypoint(ctx: agents.JobContext):
             await session.aclose()
         except Exception as exc:
             logger.warning("Agent session cleanup failed: %s", exc)
+        usage_summary = usage_collector.get_summary()
+        model_name = profile_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+        estimated_cost = record_call_usage(
+            trace_provider,
+            usage_summary,
+            model=model_name,
+            metadata={
+                "direction": trace_metadata["call.direction"],
+                "room": ctx.room.name,
+                "campaign_id": trace_metadata["campaign.id"],
+            },
+        )
+        if estimated_cost is not None:
+            logger.info("Estimated Gemini cost for %s: $%.6f", ctx.room.name, estimated_cost)
         try:
             await ctx.room.disconnect()
         except Exception:
