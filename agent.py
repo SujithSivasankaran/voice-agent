@@ -264,9 +264,15 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("SIP participant already present — skipping dial-out")
 
     # ── Speak opening line ────────────────────────────────────────────────────
-    await session.generate_reply(
-        instructions=f"Start immediately: 'Hi, am I speaking with {lead_name}?'"
-    )
+    # Prefer a fixed greeting via say() so the agent speaks instantly on pickup —
+    # no LLM generation/warmup and no pre-greeting tool call. Fall back to
+    # generate_reply() if say() is unsupported by the realtime model.
+    greeting = f"Hi, am I speaking with {lead_name}?"
+    try:
+        await session.say(greeting, allow_interruptions=True)
+    except Exception as exc:
+        logger.warning("say() opening failed (%s) — falling back to generate_reply", exc)
+        await session.generate_reply(instructions=f"Start immediately: '{greeting}'")
 
     # ── Wait for the room to close (SIP participant hangs up) ─────────────────
     # We listen for the room's "disconnected" event rather than calling

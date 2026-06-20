@@ -39,7 +39,8 @@ class AppointmentTools(llm.ToolContext):
         """Return tool methods filtered by the enabled list. Empty list = all enabled."""
         all_methods = [
             self.check_availability, self.book_appointment, self.end_call,
-            self.transfer_to_human, self.send_sms_confirmation, self.lookup_contact,
+            self.transfer_to_human, self.send_sms_confirmation,
+            # self.lookup_contact,  # disabled for now — re-add to re-enable
             self.remember_details, self.book_calcom, self.cancel_calcom,
         ]
         if not enabled:
