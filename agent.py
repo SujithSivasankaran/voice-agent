@@ -117,7 +117,7 @@ def _build_session(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
                     end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
                     silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "200")),
-2                    prefix_padding_ms=00,
+                    prefix_padding_ms=200,
                 ),
             )
             _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
