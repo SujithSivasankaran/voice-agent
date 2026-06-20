@@ -32,7 +32,7 @@ from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import noise_cancellation, silero
 
 from db import init_db, log_error, get_enabled_tools, get_agent_profile
-from prompts import build_prompt
+from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
 
 logging.basicConfig(level=logging.INFO)
@@ -108,9 +108,14 @@ except ImportError:
     logger.warning("livekit-plugins-google not installed")
 
 _deepgram_stt = None
+_deepgram_tts = None
 try:
     from livekit.plugins import deepgram as _dg
     _deepgram_stt = _dg.STT
+    try:
+        _deepgram_tts = _dg.TTS
+    except AttributeError:
+        pass
 except ImportError:
     pass
 
@@ -171,7 +176,18 @@ def _build_session(
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
 
-        return AgentSession(llm=RealtimeClass(**realtime_kwargs))
+        # Attach a TTS so session.say() can speak a fixed line (e.g. the inbound
+        # greeting) — the realtime model itself ignores say(). The TTS is only
+        # used when we explicitly call say(); normal conversation stays on Gemini.
+        session_kwargs: dict = {"llm": RealtimeClass(**realtime_kwargs)}
+        if _deepgram_tts is not None:
+            try:
+                session_kwargs["tts"] = _deepgram_tts(
+                    model=os.environ.get("DEEPGRAM_TTS_MODEL", "aura-asteria-en")
+                )
+            except Exception as exc:
+                logger.warning("Could not attach greeting TTS (%s)", exc)
+        return AgentSession(**session_kwargs)
 
     if _google_llm is None:
         raise RuntimeError(
@@ -259,7 +275,11 @@ async def entrypoint(ctx: agents.JobContext):
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
     # ── Build system prompt ───────────────────────────────────────────────────
-    system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
+    # Incoming calls use the inbound (reception) prompt; outgoing use the outreach prompt.
+    if is_inbound:
+        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt)
+    else:
+        system_prompt = build_prompt(lead_name, business_name, service_type, custom_prompt)
 
     # ── Build tool set ────────────────────────────────────────────────────────
     enabled_tools  = meta.get("enabled_tools") or await get_enabled_tools()
@@ -313,15 +333,16 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("SIP participant already present — skipping dial-out")
 
     # ── Speak opening line ────────────────────────────────────────────────────
-    # Prefer a fixed greeting via say() so the agent speaks instantly on pickup —
-    # no LLM generation/warmup and no pre-greeting tool call. Fall back to
-    # generate_reply() if say() is unsupported by the realtime model.
-    greeting = f"Hi, am I speaking with {lead_name}?"
-    try:
-        await session.say(greeting, allow_interruptions=True)
-    except Exception as exc:
-        logger.warning("say() opening failed (%s) — falling back to generate_reply", exc)
-        await session.generate_reply(instructions=f"Start immediately: '{greeting}'")
+    # INBOUND: the caller dialled us and expects to hear someone, so speak the
+    # fixed greeting immediately via the attached TTS (say()). Then the Gemini
+    # realtime model handles the rest of the conversation.
+    # OUTBOUND: left reactive (replies after the callee says hello) — unchanged.
+    if is_inbound:
+        greeting = "Hi, this is Priya from Harry's Fitcamp. How can I help you?"
+        try:
+            await session.say(greeting, allow_interruptions=True)
+        except Exception as exc:
+            logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
 
     # ── Wait for the room to close (SIP participant hangs up) ─────────────────
     # We listen for the room's "disconnected" event rather than calling
