@@ -252,7 +252,7 @@ class AppointmentTools(llm.ToolContext):
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={"eventTypeId": int(event_type_id), "start": start_iso, "timeZone": timezone,
                           "responses": {"name": name, "email": email, "notes": notes},
-                          "metadata": {"source": "OutboundAI"}, "language": "en"},
+                          "metadata": {"source": "T-800"}, "language": "en"},
                 )
             data = resp.json()
             if resp.status_code not in (200, 201):

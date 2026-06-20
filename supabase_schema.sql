@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════
--- OutboundAI — Complete Database Schema
+-- T-800 — Complete Database Schema
 -- ═══════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS appointments (

@@ -37,7 +37,7 @@ from db import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-server")
 
-app = FastAPI(title="OutboundAI", version="1.0.0")
+app = FastAPI(title="T-800", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -222,7 +222,7 @@ async def root():
     ui_path = Path(__file__).parent / "ui" / "index.html"
     if ui_path.exists():
         return HTMLResponse(ui_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>OutboundAI</h1><p>ui/index.html not found</p>")
+    return HTMLResponse("<h1>T-800</h1><p>ui/index.html not found</p>")
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

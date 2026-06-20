@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "==> OutboundAI starting up"
+echo "==> T-800 starting up"
 echo "    LiveKit : ${LIVEKIT_URL}"
 echo "    Gemini  : ${GEMINI_MODEL:-gemini-3.1-flash-live-preview}"
 echo "    Supabase: ${SUPABASE_URL}"
