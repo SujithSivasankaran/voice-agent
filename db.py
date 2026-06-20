@@ -529,6 +529,13 @@ async def get_agent_profile(profile_id: str) -> Optional[dict]:
     return result.data if result else None
 
 
+async def get_default_agent_profile() -> Optional[dict]:
+    db = await _adb()
+    result = await db.table("agent_profiles").select("*").eq("is_default", 1).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 async def create_agent_profile(
     name: str, voice: str = "Aoede", model: str = "gemini-3.1-flash-live-preview",
     system_prompt: Optional[str] = None, enabled_tools: str = "[]", is_default: bool = False,

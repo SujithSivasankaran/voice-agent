@@ -34,7 +34,7 @@ from db import (
     get_active_campaigns, update_campaign_generated, set_campaign_prompt_status,
     append_campaign_feedback,
     get_contact_memory, add_contact_memory,
-    get_all_agent_profiles, get_agent_profile, create_agent_profile,
+    get_all_agent_profiles, get_agent_profile, get_default_agent_profile, create_agent_profile,
     update_agent_profile, delete_agent_profile, set_default_agent_profile,
 )
 
@@ -164,12 +164,12 @@ async def _regenerate_default_prompt() -> None:
         await log_error("server", f"Default prompt revision failed: {exc}", "default", "error")
 
 
-async def _regenerate_campaign(campaign_id: str) -> None:
+async def _regenerate_campaign(campaign_id: str, pending_status: str = "generating") -> None:
     """Background task: (re)generate a campaign's outbound prompt + summary."""
     c = await get_campaign(campaign_id)
     if not c or not c.get("purpose"):
         return
-    await set_campaign_prompt_status(campaign_id, "generating")
+    await set_campaign_prompt_status(campaign_id, pending_status)
     feedback = []
     if c.get("feedback"):
         try:
@@ -211,6 +211,16 @@ async def _assemble_campaign_call_prompt(campaign: dict) -> str:
         default_prompt,
     )
 
+
+async def _default_outbound_profile_id() -> Optional[str]:
+    """The profile marked default is authoritative for every outbound call."""
+    try:
+        profile = await get_default_agent_profile()
+        return profile.get("id") if profile else None
+    except Exception as exc:
+        logger.warning("Could not load default outbound agent profile: %s", exc)
+        return None
+
 async def _run_campaign(campaign_id: str) -> None:
     campaign = await get_campaign(campaign_id)
     if not campaign:
@@ -229,7 +239,7 @@ async def _run_campaign(campaign_id: str) -> None:
         contacts = []
 
     delay = int(campaign.get("call_delay_seconds", 3))
-    agent_profile_id = campaign.get("agent_profile_id")
+    agent_profile_id = await _default_outbound_profile_id()
 
     base_prompt = campaign.get("system_prompt")
     custom_prompt = await _assemble_campaign_call_prompt(campaign) if base_prompt else None
@@ -249,8 +259,6 @@ async def _run_campaign(campaign_id: str) -> None:
             extra["system_prompt"] = custom_prompt
         if agent_profile_id:
             extra["agent_profile_id"] = agent_profile_id
-        if contact.get("service"):
-            extra["service_type"] = contact["service"]
 
         ok = await _dispatch_call(phone, name, extra)
         if ok:
@@ -365,15 +373,13 @@ async def call_single(request: Request):
     phone        = (body.get("phone_number") or "").strip()
     lead_name    = (body.get("lead_name") or "").strip() or "there"
     business     = "Harry's Fitcamp"
-    service      = (body.get("service_type") or "").strip() or "our service"
     custom_p     = body.get("system_prompt", "")
-    profile_id   = body.get("agent_profile_id", "")
     campaign_id  = body.get("campaign_id", "")
 
     if not phone:
         raise HTTPException(400, "phone_number is required")
 
-    meta: dict = {"business_name": business, "service_type": service}
+    meta: dict = {"business_name": business}
     campaign = await _get_call_campaign(campaign_id)
     if campaign:
         meta["campaign_id"] = campaign["id"]
@@ -386,6 +392,7 @@ async def call_single(request: Request):
             )
         else:
             meta["system_prompt"] = custom_p
+    profile_id = await _default_outbound_profile_id()
     if profile_id:
         meta["agent_profile_id"] = profile_id
 
@@ -400,10 +407,8 @@ async def call_single(request: Request):
 @app.post("/call/batch")
 async def call_batch(
     file: UploadFile = File(...),
-    service_type: str = Form("our service"),
     call_delay_seconds: int = Form(3),
     system_prompt: str = Form(""),
-    agent_profile_id: str = Form(""),
     campaign_id: str = Form(""),
 ):
     content = await file.read()
@@ -415,6 +420,7 @@ async def call_batch(
         raise HTTPException(400, "CSV has no rows")
 
     campaign = await _get_call_campaign(campaign_id)
+    agent_profile_id = await _default_outbound_profile_id()
 
     dispatched = 0
     failed = 0
@@ -428,7 +434,7 @@ async def call_batch(
             results.append({"phone": "", "status": "skipped", "reason": "no phone"})
             continue
 
-        meta: dict = {"business_name": "Harry's Fitcamp", "service_type": service_type}
+        meta: dict = {"business_name": "Harry's Fitcamp"}
         if campaign:
             meta["campaign_id"] = campaign["id"]
             meta["campaign_name"] = campaign["name"]
@@ -593,8 +599,6 @@ async def upload_campaign(
         nm    = (row.get("name") or row.get("lead_name") or "there").strip()
         if phone:
             entry: dict = {"phone": phone, "name": nm}
-            if row.get("service"):
-                entry["service"] = row["service"]
             contacts.append(entry)
 
     if not contacts:
@@ -664,8 +668,11 @@ async def campaign_feedback(campaign_id: str, request: Request):
     if not c:
         raise HTTPException(404, "Campaign not found")
     await append_campaign_feedback(campaign_id, text)
+    # Persist the visible state before returning so the UI never briefly shows
+    # the old script as ready while the background rewrite is queued.
+    await set_campaign_prompt_status(campaign_id, "rewriting")
     # Regenerate the prompt in the background using purpose + all feedback so far.
-    asyncio.create_task(_regenerate_campaign(campaign_id))
+    asyncio.create_task(_regenerate_campaign(campaign_id, "rewriting"))
     return {"status": "feedback_received", "regenerating": True}
 
 

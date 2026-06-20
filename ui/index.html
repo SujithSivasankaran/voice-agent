@@ -343,10 +343,6 @@
       <div class="form-grid">
         <div class="form-group"><label>Phone Number *</label><input id="sc-phone" placeholder="+919876543210" /></div>
         <div class="form-group"><label>Lead Name</label><input id="sc-name" placeholder="Rahul Sharma" /></div>
-        <div class="form-group"><label>Service Type</label><input id="sc-service" placeholder="trial assessment session" /></div>
-        <div class="form-group"><label>Agent Profile</label>
-          <select id="sc-profile"><option value="">— Default —</option></select>
-        </div>
         <div class="form-group"><label>Campaign</label>
           <select id="sc-campaign"><option value="">— Default prompt —</option></select>
         </div>
@@ -367,16 +363,12 @@
       <div class="drop-zone" id="batch-drop" onclick="document.getElementById('batch-file').click()">
         <div style="font-size:28px;margin-bottom:8px">📂</div>
         <div>Drop CSV here or click to browse</div>
-        <div style="font-size:11px;margin-top:6px;color:var(--muted)">Required: phone, name &nbsp;·&nbsp; Optional: service</div>
+        <div style="font-size:11px;margin-top:6px;color:var(--muted)">Required columns: phone, name</div>
         <input type="file" id="batch-file" accept=".csv" style="display:none" onchange="onBatchFileSelect(this)" />
       </div>
       <div id="batch-file-name" style="margin-top:10px;color:var(--muted);font-size:12px"></div>
       <div class="form-grid" style="margin-top:18px">
-        <div class="form-group"><label>Service Type</label><input id="bk-service" placeholder="trial assessment session" /></div>
         <div class="form-group"><label>Delay Between Calls (sec)</label><input id="bk-delay" type="number" value="3" min="0" /></div>
-        <div class="form-group"><label>Agent Profile</label>
-          <select id="bk-profile"><option value="">— Default —</option></select>
-        </div>
         <div class="form-group"><label>Campaign</label>
           <select id="bk-campaign"><option value="">— Default prompt —</option></select>
         </div>
@@ -392,7 +384,7 @@
 <!-- CAMPAIGNS -->
 <div class="page" id="page-campaigns">
   <h1>Campaigns</h1>
-  <p class="subtitle">Describe a campaign's purpose and the AI writes the call script. Active campaigns are also available to inbound callers.</p>
+  <p class="subtitle">Campaign cards show the information available to the agent, making missing details easy to spot.</p>
 
   <!-- Always-on default base script (feedback-driven, not directly editable) -->
   <div class="section-title">Default Script</div>
@@ -679,8 +671,6 @@ document.querySelectorAll('nav a[data-page]').forEach(a => {
 function onPageLoad(page) {
   if (page === 'dashboard')      { loadDashboard(); }
   if (page === 'new-call')       {
-    loadProfilesIntoSelect('sc-profile');
-    loadProfilesIntoSelect('bk-profile');
     loadCampaignsIntoSelect('sc-campaign');
     loadCampaignsIntoSelect('bk-campaign');
   }
@@ -822,9 +812,7 @@ async function dispatchSingleCall() {
       body: JSON.stringify({
         phone_number: phone,
         lead_name: document.getElementById('sc-name').value.trim() || 'there',
-        service_type: document.getElementById('sc-service').value.trim() || 'trial assessment session',
         system_prompt: document.getElementById('sc-prompt').value.trim(),
-        agent_profile_id: document.getElementById('sc-profile').value,
         campaign_id: document.getElementById('sc-campaign').value,
       }),
     });
@@ -843,9 +831,7 @@ async function dispatchBatch() {
   if (!batchFile) { toast('Select a CSV file first', false); return; }
   const fd = new FormData();
   fd.append('file', batchFile);
-  fd.append('service_type', document.getElementById('bk-service').value || 'trial assessment session');
   fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
-  fd.append('agent_profile_id', document.getElementById('bk-profile').value || '');
   fd.append('campaign_id', document.getElementById('bk-campaign').value || '');
   try {
     const r = await fetch('/call/batch', { method: 'POST', body: fd });
@@ -931,12 +917,23 @@ async function loadCampaigns() {
       el.innerHTML = '<div class="empty-state"><div class="ico">🚀</div><div>No campaigns yet — create one above</div></div>';
       return;
     }
-    const PS = { generating: '✨ Writing script…', ready: '✅ Script ready', error: '⚠️ Script failed' };
+    const PS = {
+      generating: '✨ Writing script…',
+      rewriting: '✨ Rewriting script…',
+      ready: '✅ Script ready',
+      error: '⚠️ Script failed',
+    };
     el.innerHTML = camps.map(c => {
       const contacts = (() => { try { return JSON.parse(c.contacts_json || '[]').length; } catch { return '?'; } })();
       const status = c.prompt_status ? `<span style="font-size:11px;color:var(--muted)">${PS[c.prompt_status]||''}</span>` : '';
-      const purpose = c.purpose ? `<div style="font-size:12.5px;color:var(--text);margin:6px 0 2px">🎯 ${c.purpose}</div>` : '';
-      const summary = c.summary ? `<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:4px">“${c.summary}”</div>` : '';
+      const summary = c.summary
+        ? `<div style="margin-top:8px;padding:10px 12px;background:var(--bg);border-radius:8px">
+             <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted);margin-bottom:4px">AGENT-ACCESSIBLE SUMMARY</div>
+             <div style="font-size:12.5px;color:var(--text);white-space:pre-wrap">${c.summary}</div>
+           </div>`
+        : `<div style="margin-top:8px;padding:10px 12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--muted)">
+             ${['generating', 'rewriting'].includes(c.prompt_status) ? 'Agent summary is being updated…' : 'No agent summary is available. Add a campaign purpose or feedback to provide the missing information.'}
+           </div>`;
       const schedule = c.schedule_type === 'manual'
         ? ''
         : `${contacts} contacts &nbsp;·&nbsp; ${c.schedule_type} ${c.schedule_time ? '@ '+c.schedule_time : ''}<br>`;
@@ -944,7 +941,7 @@ async function loadCampaigns() {
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
             <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name} &nbsp; ${status}</div>
-            ${purpose}${summary}
+            ${summary}
             <div style="color:var(--muted);font-size:12px;line-height:1.8;margin-top:6px">
               ${schedule}
               Dispatched: ${c.total_dispatched||0} &nbsp; Failed: ${c.total_failed||0}
@@ -1230,16 +1227,6 @@ async function deleteProfile(id) {
   if (!confirm('Delete this profile?')) return;
   try { await api(`/agent-profiles/${id}`, {method:'DELETE'}); toast('Deleted'); loadProfiles(); }
   catch(e) { toast(e.message, false); }
-}
-
-async function loadProfilesIntoSelect(elId) {
-  try {
-    const profiles = await api('/agent-profiles');
-    const sel = document.getElementById(elId);
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">— Default —</option>' + profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-    if (cur) sel.value = cur;
-  } catch {}
 }
 
 // ── Default Script (feedback-driven, read-only) ─────────────────────────────────

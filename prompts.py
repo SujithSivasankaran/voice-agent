@@ -182,11 +182,10 @@ def _fill_prompt_placeholders(
 ) -> str:
     """Replace only supported fields; generated prompts may contain unrelated braces."""
     clean_lead = lead_name.strip() if isinstance(lead_name, str) else ""
-    clean_service = service_type.strip() if isinstance(service_type, str) else ""
     values = {
         "lead_name": clean_lead or "there",
         "business_name": "Harry's Fitcamp",
-        "service_type": clean_service or "our service",
+        "service_type": "trial assessment session",
     }
     out = template
     for field, value in values.items():
