@@ -35,6 +35,8 @@ class AppointmentTools(llm.ToolContext):
         self._call_start_time = time.time()
         self._sip_domain = os.environ.get("VOBIZ_SIP_DOMAIN", "")
         self.recording_url: Optional[str] = None
+        self._call_logged = False
+        self._booking_confirmed = False
         # Set by the entrypoint after the AgentSession is built, so end_call can
         # wait for the goodbye to finish playing before hanging up.
         self.session = None
@@ -134,6 +136,7 @@ class AppointmentTools(llm.ToolContext):
         """
         try:
             booking_id = await insert_trial(name, phone, date, time, location)
+            self._booking_confirmed = True
             return (
                 f"BOOKING CONFIRMED. ID: {booking_id}. One-hour trial at "
                 f"{location.upper()} on {date} at {time}."
@@ -162,6 +165,7 @@ class AppointmentTools(llm.ToolContext):
                 lead_name=self.lead_name, outcome=outcome, reason=reason,
                 duration_seconds=duration, recording_url=self.recording_url,
             )
+            self._call_logged = True
         except Exception as exc:
             logger.error("Failed to log call: %s", exc)
         # Let the spoken goodbye finish before hanging up so the call doesn't
@@ -201,6 +205,35 @@ class AppointmentTools(llm.ToolContext):
         except Exception:
             pass
         return "Call ended."
+
+    async def ensure_call_logged(
+        self,
+        outcome: str = "completed",
+        reason: str = "call disconnected",
+    ) -> None:
+        """Save one fallback dashboard row when the model did not call end_call."""
+        if self._call_logged:
+            return
+        if self._booking_confirmed:
+            outcome = "booked"
+        for attempt in range(1, 4):
+            try:
+                await log_call(
+                    phone_number=self.phone_number or "unknown",
+                    lead_name=self.lead_name,
+                    outcome=outcome,
+                    reason=reason,
+                    duration_seconds=int(time.time() - self._call_start_time),
+                    recording_url=self.recording_url,
+                )
+                self._call_logged = True
+                logger.info("Fallback call log saved (%s): %s", outcome, self.phone_number)
+                return
+            except Exception as exc:
+                logger.warning("Fallback call logging attempt %d failed: %s", attempt, exc)
+                if attempt < 3:
+                    await asyncio.sleep(0.25 * attempt)
+        logger.error("Fallback call logging exhausted all retries: %s", self.phone_number)
 
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:

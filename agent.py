@@ -31,7 +31,7 @@ from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
-from db import init_db, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns, get_default_prompt
+from db import init_db, log_call, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns, get_default_prompt
 from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
 from observability import record_call_usage, setup_langfuse
@@ -88,6 +88,42 @@ def _is_sip_participant(participant) -> bool:
     return identity.startswith("sip_") or any(
         str(key).lower().startswith("sip.") for key in attributes
     )
+
+
+def _sip_failure_outcome(exc: Exception) -> tuple[str, str]:
+    detail = str(exc)
+    text = detail.lower()
+    if "busy" in text or "486" in text:
+        return "busy", detail
+    if any(value in text for value in ("declin", "reject", "603")):
+        return "declined", detail
+    if any(value in text for value in ("timeout", "timed out", "no answer", "408", "480")):
+        return "no_answer", detail
+    return "failed", detail
+
+
+async def _save_early_call(
+    phone: str,
+    lead_name: str,
+    outcome: str,
+    reason: str,
+) -> None:
+    """Persist calls that finish before AppointmentTools exists."""
+    for attempt in range(1, 4):
+        try:
+            await log_call(
+                phone_number=phone or "unknown",
+                lead_name=lead_name,
+                outcome=outcome,
+                reason=reason,
+                duration_seconds=0,
+            )
+            return
+        except Exception as exc:
+            logger.warning("Early call logging attempt %d failed (%s): %s", attempt, outcome, exc)
+            if attempt < 3:
+                await asyncio.sleep(0.25 * attempt)
+    logger.error("Early call logging exhausted all retries: %s", phone or "unknown")
 
 
 # ── Import Google plugin paths ────────────────────────────────────────────────
@@ -279,16 +315,26 @@ async def entrypoint(ctx: agents.JobContext):
             logger.warning("Could not load agent profile %s: %s", agent_profile_id, exc)
 
     # ── Connect to LiveKit room ───────────────────────────────────────────────
-    await ctx.connect()
+    try:
+        await ctx.connect()
+    except Exception as exc:
+        await _save_early_call(phone_number, lead_name, "failed", f"room connection failed: {exc}")
+        logger.exception("Could not connect to LiveKit room")
+        return
 
     # A SIP participant leaving does not necessarily disconnect the local room,
     # so listen for both events from the moment we connect.
     call_ended = asyncio.Event()
+    fallback_outcome = "completed"
+    fallback_reason = "session ended"
 
     @ctx.room.on("participant_disconnected")
     def _on_participant_disconnected(participant):
+        nonlocal fallback_outcome, fallback_reason
         if _is_sip_participant(participant):
             logger.info("SIP participant disconnected: %s", getattr(participant, "identity", "unknown"))
+            fallback_outcome = "caller_hangup"
+            fallback_reason = "caller disconnected after answer"
             call_ended.set()
 
     @ctx.room.on("disconnected")
@@ -303,6 +349,7 @@ async def entrypoint(ctx: agents.JobContext):
         caller = await _wait_for_sip_participant(ctx, timeout=15)
         if caller is None:
             await _log("warning", "Inbound job had no SIP participant; closing without starting AI")
+            await _save_early_call("unknown", lead_name, "no_answer", "inbound job had no SIP participant")
             await ctx.room.disconnect()
             return
         caller_num = _caller_number(caller)
@@ -351,6 +398,7 @@ async def entrypoint(ctx: agents.JobContext):
     if phone_number and not sip_already_present and not is_inbound:
         if not trunk_id:
             await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
+            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured")
             await ctx.room.disconnect()
             return
         else:
@@ -369,6 +417,8 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info("Call answered by %s", phone_number)
             except Exception as exc:
                 await _log("error", f"SIP dial failed: {exc}", str(exc))
+                outcome, reason = _sip_failure_outcome(exc)
+                await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}")
                 await ctx.room.disconnect()
                 return
     else:
@@ -378,13 +428,20 @@ async def entrypoint(ctx: agents.JobContext):
     # model connection is created only after wait_until_answered succeeds.
     if call_ended.is_set():
         await _log("info", f"Call ended before AI session started — phone={phone_number}")
+        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started")
         await ctx.room.disconnect()
         return
 
-    enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
-    tools_instance = AppointmentTools(ctx, phone_number, lead_name)
-    tool_list = tools_instance.build_tool_list(enabled_tools, inbound=is_inbound)
-    session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
+    try:
+        enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
+        tools_instance = AppointmentTools(ctx, phone_number, lead_name)
+        tool_list = tools_instance.build_tool_list(enabled_tools, inbound=is_inbound)
+        session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
+    except Exception as exc:
+        await _save_early_call(phone_number, lead_name, "failed", f"agent setup failed: {exc}")
+        logger.exception("Could not build agent session")
+        await ctx.room.disconnect()
+        return
     tools_instance.session = session
     agent = Agent(instructions=system_prompt, tools=tool_list)
     usage_collector = metrics.UsageCollector()
@@ -416,7 +473,13 @@ async def entrypoint(ctx: agents.JobContext):
         try:
             await asyncio.wait_for(call_ended.wait(), timeout=max_call_seconds)
         except asyncio.TimeoutError:
+            fallback_outcome = "timeout"
+            fallback_reason = f"call reached {max_call_seconds}s safety timeout"
             await _log("warning", f"Call hit {max_call_seconds}s safety timeout: {phone_number}")
+    except Exception as exc:
+        fallback_outcome = "failed"
+        fallback_reason = f"agent session failed: {exc}"
+        logger.exception("Agent session failed")
     finally:
         # Explicitly closing AgentSession closes the Gemini realtime connection;
         # disconnecting the room alone is not a reliable billing boundary.
@@ -424,6 +487,7 @@ async def entrypoint(ctx: agents.JobContext):
             await session.aclose()
         except Exception as exc:
             logger.warning("Agent session cleanup failed: %s", exc)
+        await tools_instance.ensure_call_logged(fallback_outcome, fallback_reason)
         usage_summary = usage_collector.get_summary()
         model_name = profile_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
         estimated_cost = record_call_usage(
