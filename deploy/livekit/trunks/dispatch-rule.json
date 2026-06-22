@@ -1,0 +1,14 @@
+{
+  "name": "inbound-to-agent",
+  "trunk_ids": [],
+  "rule": {
+    "dispatchRuleIndividual": {
+      "roomPrefix": "inbound-call"
+    }
+  },
+  "roomConfig": {
+    "agents": [
+      { "agentName": "outbound-caller" }
+    ]
+  }
+}
