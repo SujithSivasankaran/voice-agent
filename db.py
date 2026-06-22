@@ -239,96 +239,143 @@ async def clear_errors() -> None:
 
 # ── Appointments ──────────────────────────────────────────────────────────────
 
+# Default (Harry's Fitcamp) booking rules. A brand with no booking_config of its
+# own falls back to these, so the seeded default brand behaves exactly as before.
 TRIAL_LOCATIONS = ("ADAYAR", "ECR")
 TRIAL_SLOT_TIMES = (
     "06:00", "07:00", "08:00", "09:00",
     "16:30", "17:30", "18:30", "19:30",
 )
+DEFAULT_TRIAL_DURATION_MINUTES = 60
+DEFAULT_TRIAL_OFF_DAYS = (6,)  # weekday ints (Mon=0 … Sun=6); Sunday closed
 
 
 class TrialSlotUnavailable(Exception):
     pass
 
 
-def normalize_trial_location(location: str) -> str:
+def resolve_booking_config(config: Optional[dict]) -> dict:
+    """Normalise a brand's booking_config, falling back to the Harry's defaults
+    for any missing field. Returns locations (UPPER), slot_times, duration, off_days."""
+    config = config or {}
+    locations = tuple(
+        str(loc).strip().upper()
+        for loc in (config.get("locations") or TRIAL_LOCATIONS)
+        if str(loc).strip()
+    ) or TRIAL_LOCATIONS
+    slot_times = tuple(config.get("slot_times") or TRIAL_SLOT_TIMES)
+    try:
+        duration = int(config.get("duration_minutes") or DEFAULT_TRIAL_DURATION_MINUTES)
+    except (TypeError, ValueError):
+        duration = DEFAULT_TRIAL_DURATION_MINUTES
+    off_days_raw = config.get("off_days")
+    off_days = tuple(off_days_raw) if off_days_raw is not None else DEFAULT_TRIAL_OFF_DAYS
+    return {
+        "locations": locations,
+        "slot_times": slot_times,
+        "duration_minutes": duration,
+        "off_days": off_days,
+    }
+
+
+def normalize_trial_location(location: str, config: Optional[dict] = None) -> str:
+    cfg = resolve_booking_config(config)
     value = (location or "").strip().upper()
-    if value not in TRIAL_LOCATIONS:
-        raise ValueError("location must be ADAYAR or ECR")
+    if value not in cfg["locations"]:
+        raise ValueError("location must be " + " or ".join(cfg["locations"]))
     return value
 
 
-def validate_trial_slot(date: str, time: str, location: str) -> tuple[str, str, str]:
-    location = normalize_trial_location(location)
+def validate_trial_slot(
+    date: str, time: str, location: str, config: Optional[dict] = None,
+) -> tuple[str, str, str]:
+    cfg = resolve_booking_config(config)
+    location = normalize_trial_location(location, config)
     try:
         slot = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError as exc:
         raise ValueError("date and time must use YYYY-MM-DD and HH:MM") from exc
-    if slot.weekday() == 6:
-        raise ValueError("trial sessions are unavailable on Sundays")
-    if time not in TRIAL_SLOT_TIMES:
-        raise ValueError("time must be one of: " + ", ".join(TRIAL_SLOT_TIMES))
-    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    if slot.weekday() in cfg["off_days"]:
+        raise ValueError("trial sessions are unavailable on that day")
+    if time not in cfg["slot_times"]:
+        raise ValueError("time must be one of: " + ", ".join(cfg["slot_times"]))
+    now = datetime.now(IST).replace(tzinfo=None)
     if slot <= now:
         raise ValueError("trial slot must be in the future")
     return date, time, location
 
 
-async def check_trial_slot(date: str, time: str, location: str) -> bool:
-    """One active one-hour trial is allowed per location/start time."""
-    date, time, location = validate_trial_slot(date, time, location)
+async def check_trial_slot(
+    date: str, time: str, location: str,
+    brand_id: Optional[str] = None, config: Optional[dict] = None,
+) -> bool:
+    """One active trial is allowed per brand/location/start time."""
+    date, time, location = validate_trial_slot(date, time, location, config)
     db = await _adb()
-    result = await (
+    query = (
         db.table("trials").select("id")
         .eq("date", date).eq("time", time).eq("location", location)
-        .eq("status", "booked").limit(1).execute()
+        .eq("status", "booked")
     )
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
+    result = await query.limit(1).execute()
     return not bool(result.data)
 
 
 async def get_next_available_trial_slots(
     date: str, time: str, location: str, limit: int = 3,
+    brand_id: Optional[str] = None, config: Optional[dict] = None,
 ) -> list[str]:
-    """Return the next valid one-hour starts at the requested gym location."""
-    location = normalize_trial_location(location)
+    """Return the next valid trial starts at the requested location for a brand."""
+    cfg = resolve_booking_config(config)
+    location = normalize_trial_location(location, config)
     try:
         requested = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError:
-        requested = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
-    now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+        requested = datetime.now(IST).replace(tzinfo=None)
+    now = datetime.now(IST).replace(tzinfo=None)
     start = max(requested, now)
     found: list[str] = []
     for day_offset in range(15):
         day = (start + timedelta(days=day_offset)).date()
-        if day.weekday() == 6:
+        if day.weekday() in cfg["off_days"]:
             continue
-        for slot_time in TRIAL_SLOT_TIMES:
+        for slot_time in cfg["slot_times"]:
             candidate = datetime.strptime(f"{day.isoformat()} {slot_time}", "%Y-%m-%d %H:%M")
             if candidate <= start:
                 continue
-            if await check_trial_slot(day.isoformat(), slot_time, location):
+            if await check_trial_slot(day.isoformat(), slot_time, location, brand_id, config):
                 found.append(f"{day.isoformat()} at {slot_time}")
                 if len(found) >= limit:
                     return found
     return found
 
 
-async def insert_trial(name: str, phone: str, date: str, time: str, location: str) -> str:
-    date, time, location = validate_trial_slot(date, time, location)
+async def insert_trial(
+    name: str, phone: str, date: str, time: str, location: str,
+    brand_id: Optional[str] = None, config: Optional[dict] = None,
+) -> str:
+    date, time, location = validate_trial_slot(date, time, location, config)
+    cfg = resolve_booking_config(config)
     full_id = str(uuid.uuid4())
     booking_id = full_id[:8].upper()
     db = await _adb()
+    row = {
+        "id": full_id, "booking_id": booking_id,
+        "name": name.strip(), "phone": phone.strip(),
+        "date": date, "time": time, "location": location,
+        "duration_minutes": cfg["duration_minutes"], "status": "booked",
+        "created_at": _now_iso(),
+    }
+    if brand_id:
+        row["brand_id"] = brand_id
     try:
-        await db.table("trials").insert({
-            "id": full_id, "booking_id": booking_id,
-            "name": name.strip(), "phone": phone.strip(),
-            "date": date, "time": time, "location": location,
-            "duration_minutes": 60, "status": "booked",
-            "created_at": _now_iso(),
-        }).execute()
+        await db.table("trials").insert(row).execute()
     except Exception as exc:
         # The DB unique index is the final concurrency guard. Re-checking lets
         # us distinguish a slot race from an unrelated database failure.
-        if not await check_trial_slot(date, time, location):
+        if not await check_trial_slot(date, time, location, brand_id, config):
             raise TrialSlotUnavailable("trial slot was just booked") from exc
         raise
     return booking_id
@@ -416,7 +463,7 @@ async def get_appointments_by_phone(phone: str) -> list:
 async def log_call(
     phone_number: str, lead_name: Optional[str], outcome: str, reason: str,
     duration_seconds: int, recording_url: Optional[str] = None, notes: Optional[str] = None,
-    transcript: Optional[str] = None,
+    transcript: Optional[str] = None, brand_id: Optional[str] = None,
 ) -> str:
     db = await _adb()
     call_id = str(uuid.uuid4())
@@ -431,6 +478,8 @@ async def log_call(
         row["notes"] = notes
     if transcript:
         row["transcript"] = transcript
+    if brand_id:
+        row["brand_id"] = brand_id
     await db.table("call_logs").insert(row).execute()
     return call_id
 
@@ -441,10 +490,13 @@ async def update_call_transcript(call_id: str, transcript: str) -> bool:
     return len(result.data or []) > 0
 
 
-async def get_all_calls(page: int = 1, limit: int = 20) -> list:
+async def get_all_calls(page: int = 1, limit: int = 20, brand_id: Optional[str] = None) -> list:
     db = await _adb()
     offset = (page - 1) * limit
-    result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
+    query = db.table("call_logs").select("*").order("timestamp", desc=True)
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
+    result = await query.range(offset, offset + limit - 1).execute()
     return result.data or []
 
 
@@ -506,9 +558,12 @@ async def get_contacts() -> list:
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
-async def get_stats() -> dict:
+async def get_stats(brand_id: Optional[str] = None) -> dict:
     db = await _adb()
-    rows = (await db.table("call_logs").select("outcome, duration_seconds, timestamp").execute()).data or []
+    stats_query = db.table("call_logs").select("outcome, duration_seconds, timestamp")
+    if brand_id:
+        stats_query = stats_query.eq("brand_id", brand_id)
+    rows = (await stats_query.execute()).data or []
     total_calls    = len(rows)
     booked         = sum(1 for r in rows if r.get("outcome") == "booked")
     not_interested = sum(1 for r in rows if r.get("outcome") == "not_interested")
@@ -552,7 +607,7 @@ async def create_campaign(
     name: str, contacts_json: str, schedule_type: str = "once",
     schedule_time: str = "09:00", call_delay_seconds: int = 3,
     system_prompt: Optional[str] = None, agent_profile_id: Optional[str] = None,
-    purpose: Optional[str] = None,
+    purpose: Optional[str] = None, brand_id: Optional[str] = None,
 ) -> str:
     campaign_id = str(uuid.uuid4())
     db = await _adb()
@@ -566,6 +621,8 @@ async def create_campaign(
         row["system_prompt"] = system_prompt
     if agent_profile_id:
         row["agent_profile_id"] = agent_profile_id
+    if brand_id:
+        row["brand_id"] = brand_id
     if purpose:
         row["purpose"] = purpose
         # Pending generation if a purpose is given and no explicit prompt supplied.
@@ -574,13 +631,17 @@ async def create_campaign(
     return campaign_id
 
 
-async def get_active_campaigns() -> list:
-    """Active campaigns with their short summaries — used to build inbound/outbound scope."""
+async def get_active_campaigns(brand_id: Optional[str] = None) -> list:
+    """Active campaigns with their short summaries — used to build inbound/outbound scope.
+    When brand_id is given, only that brand's active campaigns are returned."""
     db = await _adb()
-    result = await (
-        db.table("campaigns").select("id, name, summary, status")
-        .eq("status", "active").execute()
+    query = (
+        db.table("campaigns").select("id, name, summary, status, brand_id")
+        .eq("status", "active")
     )
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
+    result = await query.execute()
     return result.data or []
 
 
@@ -728,3 +789,109 @@ async def set_default_agent_profile(profile_id: str) -> None:
     db = await _adb()
     await db.table("agent_profiles").update({"is_default": 0}).neq("id", "placeholder").execute()
     await db.table("agent_profiles").update({"is_default": 1}).eq("id", profile_id).execute()
+
+
+# ── Brands (multi-tenant) ─────────────────────────────────────────────────────
+
+def _phone_digits(value: str) -> str:
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+def _numbers_match(a: str, b: str) -> bool:
+    """Lenient DID comparison: equal digit strings, or one is a suffix of the
+    other (handles +country-code vs national formats)."""
+    da, db = _phone_digits(a), _phone_digits(b)
+    if not da or not db:
+        return False
+    if da == db:
+        return True
+    short, long = (da, db) if len(da) <= len(db) else (db, da)
+    return len(short) >= 7 and long.endswith(short)
+
+
+async def get_all_brands() -> list:
+    db = await _adb()
+    result = await db.table("brands").select("*").order("created_at").execute()
+    return result.data or []
+
+
+async def get_brand(brand_id: str) -> Optional[dict]:
+    if not brand_id:
+        return None
+    db = await _adb()
+    result = await db.table("brands").select("*").eq("id", brand_id).maybe_single().execute()
+    return result.data if result else None
+
+
+async def get_default_brand() -> Optional[dict]:
+    """The brand flagged is_default; falls back to the oldest brand if none is flagged."""
+    db = await _adb()
+    result = await db.table("brands").select("*").eq("is_default", 1).limit(1).execute()
+    rows = result.data or []
+    if rows:
+        return rows[0]
+    result = await db.table("brands").select("*").order("created_at").limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+async def get_brand_by_number(did: str) -> Optional[dict]:
+    """Match an inbound dialed number (DID) to a brand by scanning each brand's
+    inbound_numbers JSON array."""
+    import json
+    if not did:
+        return None
+    for brand in await get_all_brands():
+        raw = brand.get("inbound_numbers")
+        try:
+            numbers = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except Exception:
+            numbers = []
+        if not isinstance(numbers, list):
+            continue
+        if any(_numbers_match(did, str(n)) for n in numbers):
+            return brand
+    return None
+
+
+async def create_brand(
+    name: str, assistant_name: str = "Tina", inbound_numbers: str = "[]",
+    outbound_prompt: Optional[str] = None, inbound_prompt: Optional[str] = None,
+    business_context: Optional[str] = None, booking_config: str = "{}",
+    voice: Optional[str] = None, model: Optional[str] = None, is_default: bool = False,
+) -> str:
+    brand_id = str(uuid.uuid4())
+    db = await _adb()
+    if is_default:
+        await db.table("brands").update({"is_default": 0}).neq("id", "placeholder").execute()
+    await db.table("brands").insert({
+        "id": brand_id, "name": name, "assistant_name": assistant_name,
+        "inbound_numbers": inbound_numbers, "outbound_prompt": outbound_prompt,
+        "inbound_prompt": inbound_prompt, "business_context": business_context,
+        "booking_config": booking_config, "voice": voice, "model": model,
+        "is_default": 1 if is_default else 0, "created_at": _now_iso(),
+    }).execute()
+    return brand_id
+
+
+async def update_brand(brand_id: str, updates: dict) -> bool:
+    db = await _adb()
+    if updates.get("is_default"):
+        await set_default_brand(brand_id)
+        updates = {k: v for k, v in updates.items() if k != "is_default"}
+        if not updates:
+            return True
+    result = await db.table("brands").update(updates).eq("id", brand_id).execute()
+    return len(result.data or []) > 0
+
+
+async def delete_brand(brand_id: str) -> bool:
+    db = await _adb()
+    result = await db.table("brands").delete().eq("id", brand_id).execute()
+    return len(result.data or []) > 0
+
+
+async def set_default_brand(brand_id: str) -> None:
+    db = await _adb()
+    await db.table("brands").update({"is_default": 0}).neq("id", "placeholder").execute()
+    await db.table("brands").update({"is_default": 1}).eq("id", brand_id).execute()

@@ -31,7 +31,10 @@ from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
-from db import init_db, log_call, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns, get_default_prompt
+from db import (
+    init_db, log_call, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns,
+    get_brand, get_default_brand, get_brand_by_number,
+)
 from prompts import build_prompt, build_inbound_prompt
 from tools import AppointmentTools
 from observability import record_call_usage, setup_langfuse
@@ -107,6 +110,7 @@ async def _save_early_call(
     lead_name: str,
     outcome: str,
     reason: str,
+    brand_id: Optional[str] = None,
 ) -> None:
     """Persist calls that finish before AppointmentTools exists."""
     for attempt in range(1, 4):
@@ -117,6 +121,7 @@ async def _save_early_call(
                 outcome=outcome,
                 reason=reason,
                 duration_seconds=0,
+                brand_id=brand_id,
             )
             return
         except Exception as exc:
@@ -124,6 +129,56 @@ async def _save_early_call(
             if attempt < 3:
                 await asyncio.sleep(0.25 * attempt)
     logger.error("Early call logging exhausted all retries: %s", phone or "unknown")
+
+
+# ── Brand resolution ──────────────────────────────────────────────────────────
+
+def _parse_brand(brand: Optional[dict]) -> dict:
+    """Return a brand dict with booking_config parsed into a dict under
+    'booking_config_parsed'. Accepts None and returns an empty brand, which makes
+    prompts.py/booking fall back to the built-in Harry's defaults."""
+    brand = dict(brand or {})
+    raw = brand.get("booking_config")
+    cfg: dict = {}
+    if isinstance(raw, str) and raw.strip():
+        try:
+            cfg = json.loads(raw)
+        except Exception:
+            cfg = {}
+    elif isinstance(raw, dict):
+        cfg = raw
+    brand["booking_config_parsed"] = cfg if isinstance(cfg, dict) else {}
+    return brand
+
+
+def _dialed_number(participant) -> str:
+    """The brand DID the caller dialed, read from the inbound SIP attributes."""
+    attrs = getattr(participant, "attributes", None) or {}
+    return (attrs.get("sip.trunkPhoneNumber") or attrs.get("sip.to")
+            or attrs.get("sip.toNumber") or attrs.get("sip.dialedNumber") or "")
+
+
+async def _resolve_brand(meta: dict, dialed_number: str = "") -> dict:
+    """Resolve which brand a call belongs to: explicit brand_id wins, then a DID
+    match (inbound), then the default brand. Always returns a parsed brand dict."""
+    brand = None
+    brand_id = meta.get("brand_id")
+    if brand_id:
+        try:
+            brand = await get_brand(brand_id)
+        except Exception as exc:
+            logger.warning("Could not load brand %s: %s", brand_id, exc)
+    if brand is None and dialed_number:
+        try:
+            brand = await get_brand_by_number(dialed_number)
+        except Exception as exc:
+            logger.warning("Brand DID lookup failed for %s: %s", dialed_number, exc)
+    if brand is None:
+        try:
+            brand = await get_default_brand()
+        except Exception as exc:
+            logger.warning("Could not load default brand: %s", exc)
+    return _parse_brand(brand)
 
 
 def _extract_transcript(session) -> str:
@@ -322,20 +377,18 @@ async def entrypoint(ctx: agents.JobContext):
 
     phone_number     = meta.get("phone_number", "")
     lead_name        = meta.get("lead_name", "there")
-    # Organisation identity is fixed and must not be overridden by call metadata.
-    business_name    = "Harry's Fitcamp"
-    service_type     = meta.get("service_type", "our service")
     custom_prompt    = meta.get("system_prompt") or meta.get("custom_prompt")
     agent_profile_id = meta.get("agent_profile_id")
     trunk_id         = meta.get("trunk_id") or os.environ.get("OUTBOUND_TRUNK_ID", "")
 
     trace_metadata = {
         "langfuse.session.id": ctx.room.name,
-        "langfuse.trace.name": "harrys-fitcamp-voice-call",
+        "langfuse.trace.name": "voice-call",
         "call.direction": "outbound" if phone_number else "inbound",
         "call.room": ctx.room.name,
         "campaign.id": str(meta.get("campaign_id") or ""),
         "campaign.name": str(meta.get("campaign_name") or ""),
+        "brand.id": str(meta.get("brand_id") or ""),
     }
     trace_provider = setup_langfuse(trace_metadata)
 
@@ -364,11 +417,16 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:
             logger.warning("Could not load agent profile %s: %s", agent_profile_id, exc)
 
+    # ── Resolve brand ─────────────────────────────────────────────────────────
+    # Outbound carries brand_id in metadata; inbound is refined below once we know
+    # the dialed number. Falls back to the default brand (Harry's) either way.
+    brand = await _resolve_brand(meta)
+
     # ── Connect to LiveKit room ───────────────────────────────────────────────
     try:
         await ctx.connect()
     except Exception as exc:
-        await _save_early_call(phone_number, lead_name, "failed", f"room connection failed: {exc}")
+        await _save_early_call(phone_number, lead_name, "failed", f"room connection failed: {exc}", brand.get("id"))
         logger.exception("Could not connect to LiveKit room")
         return
 
@@ -399,7 +457,7 @@ async def entrypoint(ctx: agents.JobContext):
         caller = await _wait_for_sip_participant(ctx, timeout=15)
         if caller is None:
             await _log("warning", "Inbound job had no SIP participant; closing without starting AI")
-            await _save_early_call("unknown", lead_name, "no_answer", "inbound job had no SIP participant")
+            await _save_early_call("unknown", lead_name, "no_answer", "inbound job had no SIP participant", brand.get("id"))
             await ctx.room.disconnect()
             return
         caller_num = _caller_number(caller)
@@ -407,7 +465,12 @@ async def entrypoint(ctx: agents.JobContext):
             phone_number = caller_num
         if getattr(caller, "name", ""):
             lead_name = caller.name
-        await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
+        # Log raw SIP attributes once so we can confirm which key carries the
+        # dialed DID for this trunk, then route the call to the matching brand.
+        logger.info("Inbound SIP attributes: %s", dict(getattr(caller, "attributes", None) or {}))
+        dialed = _dialed_number(caller)
+        brand = await _resolve_brand(meta, dialed)
+        await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'} → brand={brand.get('name') or 'default'} (dialed {dialed or 'unknown'})")
 
     # ── Build system prompt ───────────────────────────────────────────────────
     # Incoming calls get only a tiny campaign index. Details are fetched on demand
@@ -416,7 +479,7 @@ async def entrypoint(ctx: agents.JobContext):
     if is_inbound:
         campaign_catalog = ""
         try:
-            actives = await get_active_campaigns()
+            actives = await get_active_campaigns(brand.get("id"))
             hints = []
             for campaign in actives:
                 name = " ".join(str(campaign.get("name") or "").split())
@@ -428,17 +491,11 @@ async def entrypoint(ctx: agents.JobContext):
             campaign_catalog = "\n".join(hints)
         except Exception as exc:
             logger.warning("Could not load active campaigns for inbound: %s", exc)
-        system_prompt = build_inbound_prompt(lead_name, business_name, service_type, custom_prompt, campaign_catalog)
+        system_prompt = build_inbound_prompt(lead_name, brand, campaign_catalog)
     else:
-        # Campaign/custom metadata wins. The compact runtime prompt is the
-        # cost-safe default; the legacy long Supabase prompt is opt-in.
-        base = custom_prompt
-        if not base and os.environ.get("USE_LEGACY_DEFAULT_PROMPT", "false").lower() == "true":
-            try:
-                base = await get_default_prompt()
-            except Exception:
-                base = None
-        system_prompt = build_prompt(lead_name, business_name, service_type, base)
+        # Campaign/call-specific script wins; otherwise the brand's outbound
+        # prompt (and finally the built-in compact default) is used.
+        system_prompt = build_prompt(lead_name, brand, custom_prompt)
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
@@ -448,7 +505,7 @@ async def entrypoint(ctx: agents.JobContext):
     if phone_number and not sip_already_present and not is_inbound:
         if not trunk_id:
             await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
-            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured")
+            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured", brand.get("id"))
             await ctx.room.disconnect()
             return
         else:
@@ -468,7 +525,7 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception as exc:
                 await _log("error", f"SIP dial failed: {exc}", str(exc))
                 outcome, reason = _sip_failure_outcome(exc)
-                await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}")
+                await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}", brand.get("id"))
                 await ctx.room.disconnect()
                 return
     else:
@@ -478,17 +535,24 @@ async def entrypoint(ctx: agents.JobContext):
     # model connection is created only after wait_until_answered succeeds.
     if call_ended.is_set():
         await _log("info", f"Call ended before AI session started — phone={phone_number}")
-        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started")
+        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started", brand.get("id"))
         await ctx.room.disconnect()
         return
 
+    # Brand voice/model take precedence over the agent profile; fall back to env.
+    session_model = brand.get("model") or profile_model
+    session_voice = brand.get("voice") or profile_voice
     try:
         enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
-        tools_instance = AppointmentTools(ctx, phone_number, lead_name)
+        tools_instance = AppointmentTools(
+            ctx, phone_number, lead_name,
+            booking_config=brand.get("booking_config_parsed"),
+            brand_id=brand.get("id"),
+        )
         tool_list = tools_instance.build_tool_list(enabled_tools, inbound=is_inbound)
-        session = _build_session(tool_list, system_prompt, model=profile_model, voice=profile_voice)
+        session = _build_session(tool_list, system_prompt, model=session_model, voice=session_voice)
     except Exception as exc:
-        await _save_early_call(phone_number, lead_name, "failed", f"agent setup failed: {exc}")
+        await _save_early_call(phone_number, lead_name, "failed", f"agent setup failed: {exc}", brand.get("id"))
         logger.exception("Could not build agent session")
         await ctx.room.disconnect()
         return
@@ -545,7 +609,7 @@ async def entrypoint(ctx: agents.JobContext):
         # (by end_call during the call, or ensure_call_logged above).
         await tools_instance.attach_transcript(transcript)
         usage_summary = usage_collector.get_summary()
-        model_name = profile_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+        model_name = session_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
         estimated_cost = record_call_usage(
             trace_provider,
             usage_summary,

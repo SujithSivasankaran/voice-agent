@@ -38,6 +38,8 @@ from db import (
     get_contact_memory, add_contact_memory,
     get_all_agent_profiles, get_agent_profile, get_default_agent_profile, create_agent_profile,
     update_agent_profile, delete_agent_profile, set_default_agent_profile,
+    get_all_brands, get_brand, get_default_brand, create_brand,
+    update_brand, delete_brand, set_default_brand,
 )
 from observability import langfuse_status
 from recordings import presigned_recording_url, recording_sync_status, sync_vobiz_recordings
@@ -109,16 +111,18 @@ async def _dispatch_call(phone: str, lead_name: str, meta: dict) -> bool:
 
 # ── Campaign prompt generation (background, LLM) ───────────────────────────────
 
-async def _generate_campaign_assets(name: str, purpose: str, feedback_items: list):
+async def _generate_campaign_assets(name: str, purpose: str, feedback_items: list, default_base: str = None):
     """Turn a campaign's purpose (+ cumulative feedback) into a full outbound script
-    and a short summary, via the LLM. Returns (prompt, summary) or (None, None)."""
+    and a short summary, via the LLM. Returns (prompt, summary) or (None, None).
+    default_base is the brand's outbound script used as the style reference."""
     api_key = os.environ.get("GOOGLE_API_KEY", "")
     if not api_key or not purpose:
         return None, None
     from prompts import CAMPAIGN_GEN_INSTRUCTIONS, DEFAULT_SYSTEM_PROMPT
     fb = "\n".join(f"- {f.get('text','')}" for f in (feedback_items or [])) or "(none yet)"
+    base = (default_base or DEFAULT_SYSTEM_PROMPT)[:2200]
     instr = CAMPAIGN_GEN_INSTRUCTIONS.format(
-        default_base=DEFAULT_SYSTEM_PROMPT[:2200], name=name, purpose=purpose, feedback=fb,
+        default_base=base, name=name, purpose=purpose, feedback=fb,
     )
     try:
         import google.genai as genai
@@ -180,7 +184,18 @@ async def _regenerate_campaign(campaign_id: str, pending_status: str = "generati
             feedback = json.loads(c["feedback"])
         except Exception:
             feedback = []
-    prompt, summary = await _generate_campaign_assets(c.get("name", ""), c.get("purpose", ""), feedback)
+    # Use the campaign's brand outbound script as the style reference, so
+    # generated scripts match that brand rather than the global Harry's default.
+    brand_base = None
+    if c.get("brand_id"):
+        try:
+            brand = await get_brand(c["brand_id"])
+            brand_base = (brand or {}).get("outbound_prompt") or None
+        except Exception:
+            brand_base = None
+    prompt, summary = await _generate_campaign_assets(
+        c.get("name", ""), c.get("purpose", ""), feedback, brand_base,
+    )
     if prompt:
         await update_campaign_generated(campaign_id, prompt, summary or "", "ready")
         logger.info("Campaign %s prompt regenerated", campaign_id)
@@ -209,6 +224,23 @@ async def _default_outbound_profile_id() -> Optional[str]:
         logger.warning("Could not load default outbound agent profile: %s", exc)
         return None
 
+
+async def _resolve_call_brand_id(brand_id: Optional[str]) -> Optional[str]:
+    """Validate a chosen brand id, else fall back to the default brand's id."""
+    if brand_id:
+        try:
+            brand = await get_brand(brand_id)
+            if brand:
+                return brand["id"]
+        except Exception as exc:
+            logger.warning("Could not load brand %s: %s", brand_id, exc)
+    try:
+        brand = await get_default_brand()
+        return brand["id"] if brand else None
+    except Exception as exc:
+        logger.warning("Could not load default brand: %s", exc)
+        return None
+
 async def _run_campaign(campaign_id: str) -> None:
     campaign = await get_campaign(campaign_id)
     if not campaign:
@@ -228,6 +260,7 @@ async def _run_campaign(campaign_id: str) -> None:
 
     delay = int(campaign.get("call_delay_seconds", 3))
     agent_profile_id = await _default_outbound_profile_id()
+    brand_id = await _resolve_call_brand_id(campaign.get("brand_id"))
 
     base_prompt = campaign.get("system_prompt")
     custom_prompt = await _assemble_campaign_call_prompt(campaign) if base_prompt else None
@@ -247,6 +280,8 @@ async def _run_campaign(campaign_id: str) -> None:
             extra["system_prompt"] = custom_prompt
         if agent_profile_id:
             extra["agent_profile_id"] = agent_profile_id
+        if brand_id:
+            extra["brand_id"] = brand_id
 
         ok = await _dispatch_call(phone, name, extra)
         if ok:
@@ -379,14 +414,14 @@ async def call_single(request: Request):
     body = await request.json()
     phone        = (body.get("phone_number") or "").strip()
     lead_name    = (body.get("lead_name") or "").strip() or "there"
-    business     = "Harry's Fitcamp"
     custom_p     = body.get("system_prompt", "")
     campaign_id  = body.get("campaign_id", "")
+    brand_id     = (body.get("brand_id") or "").strip()
 
     if not phone:
         raise HTTPException(400, "phone_number is required")
 
-    meta: dict = {"business_name": business}
+    meta: dict = {}
     campaign = await _get_call_campaign(campaign_id)
     if campaign:
         meta["campaign_id"] = campaign["id"]
@@ -402,6 +437,8 @@ async def call_single(request: Request):
     profile_id = await _default_outbound_profile_id()
     if profile_id:
         meta["agent_profile_id"] = profile_id
+    # Explicit brand wins; else the selected campaign's brand; else the default.
+    meta["brand_id"] = await _resolve_call_brand_id(brand_id or (campaign or {}).get("brand_id"))
 
     ok = await _dispatch_call(phone, lead_name, meta)
     if not ok:
@@ -417,6 +454,7 @@ async def call_batch(
     call_delay_seconds: int = Form(3),
     system_prompt: str = Form(""),
     campaign_id: str = Form(""),
+    brand_id: str = Form(""),
 ):
     content = await file.read()
     text = content.decode("utf-8-sig")
@@ -428,6 +466,7 @@ async def call_batch(
 
     campaign = await _get_call_campaign(campaign_id)
     agent_profile_id = await _default_outbound_profile_id()
+    resolved_brand_id = await _resolve_call_brand_id(brand_id or (campaign or {}).get("brand_id"))
 
     dispatched = 0
     failed = 0
@@ -441,7 +480,9 @@ async def call_batch(
             results.append({"phone": "", "status": "skipped", "reason": "no phone"})
             continue
 
-        meta: dict = {"business_name": "Harry's Fitcamp"}
+        meta: dict = {}
+        if resolved_brand_id:
+            meta["brand_id"] = resolved_brand_id
         if campaign:
             meta["campaign_id"] = campaign["id"]
             meta["campaign_name"] = campaign["name"]
@@ -512,8 +553,10 @@ async def cancel_appt(appointment_id: str):
 # ── Call logs ─────────────────────────────────────────────────────────────────
 
 @app.get("/calls")
-async def list_calls(page: int = Query(1), limit: int = Query(20)):
-    return await get_all_calls(page=page, limit=limit)
+async def list_calls(
+    page: int = Query(1), limit: int = Query(20), brand_id: Optional[str] = Query(None),
+):
+    return await get_all_calls(page=page, limit=limit, brand_id=brand_id)
 
 
 @app.post("/calls/recordings/sync")
@@ -579,8 +622,8 @@ async def add_memory(phone: str, request: Request):
 # ── Stats / Charts ────────────────────────────────────────────────────────────
 
 @app.get("/stats")
-async def stats():
-    return await get_stats()
+async def stats(brand_id: Optional[str] = Query(None)):
+    return await get_stats(brand_id=brand_id)
 
 
 # ── Campaigns ─────────────────────────────────────────────────────────────────
@@ -610,6 +653,7 @@ async def new_campaign(request: Request):
         system_prompt=body.get("system_prompt"),
         agent_profile_id=body.get("agent_profile_id"),
         purpose=purpose or None,
+        brand_id=await _resolve_call_brand_id((body.get("brand_id") or "").strip()),
     )
 
     campaign = await get_campaign(cid)
@@ -633,6 +677,7 @@ async def upload_campaign(
     system_prompt: str = Form(""),
     agent_profile_id: str = Form(""),
     purpose: str = Form(""),
+    brand_id: str = Form(""),
 ):
     content = await file.read()
     text = content.decode("utf-8-sig")
@@ -657,6 +702,7 @@ async def upload_campaign(
         system_prompt=system_prompt or None,
         agent_profile_id=agent_profile_id or None,
         purpose=(purpose or "").strip() or None,
+        brand_id=await _resolve_call_brand_id(brand_id.strip()),
     )
 
     campaign = await get_campaign(cid)
@@ -741,6 +787,93 @@ async def remove_campaign(campaign_id: str):
     if not ok:
         raise HTTPException(404, "Campaign not found")
     return {"status": "deleted"}
+
+
+# ── Brands ────────────────────────────────────────────────────────────────────
+
+def _as_json_text(value, default: str) -> str:
+    """Accept a list/dict (serialise to JSON) or an already-JSON string."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip() or default
+    try:
+        return json.dumps(value)
+    except Exception:
+        return default
+
+
+@app.get("/brands")
+async def list_brands():
+    return await get_all_brands()
+
+
+@app.get("/brands/{brand_id}")
+async def get_brand_detail(brand_id: str):
+    brand = await get_brand(brand_id)
+    if not brand:
+        raise HTTPException(404, "Brand not found")
+    return brand
+
+
+@app.post("/brands")
+async def new_brand(request: Request):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    bid = await create_brand(
+        name=name,
+        assistant_name=(body.get("assistant_name") or "Tina").strip() or "Tina",
+        inbound_numbers=_as_json_text(body.get("inbound_numbers"), "[]"),
+        outbound_prompt=body.get("outbound_prompt") or None,
+        inbound_prompt=body.get("inbound_prompt") or None,
+        business_context=body.get("business_context") or None,
+        booking_config=_as_json_text(body.get("booking_config"), "{}"),
+        voice=body.get("voice") or None,
+        model=body.get("model") or None,
+        is_default=bool(body.get("is_default", False)),
+    )
+    return {"id": bid, "status": "created"}
+
+
+@app.put("/brands/{brand_id}")
+async def edit_brand(brand_id: str, request: Request):
+    body = await request.json()
+    updates: dict = {}
+    for field in ("name", "assistant_name", "outbound_prompt", "inbound_prompt",
+                  "business_context", "voice", "model"):
+        if field in body:
+            updates[field] = body[field]
+    if "inbound_numbers" in body:
+        updates["inbound_numbers"] = _as_json_text(body["inbound_numbers"], "[]")
+    if "booking_config" in body:
+        updates["booking_config"] = _as_json_text(body["booking_config"], "{}")
+    if "is_default" in body:
+        updates["is_default"] = 1 if body["is_default"] else 0
+    if not updates:
+        raise HTTPException(400, "No updatable fields provided")
+    ok = await update_brand(brand_id, updates)
+    if not ok:
+        raise HTTPException(404, "Brand not found")
+    return {"status": "updated"}
+
+
+@app.delete("/brands/{brand_id}")
+async def remove_brand(brand_id: str):
+    ok = await delete_brand(brand_id)
+    if not ok:
+        raise HTTPException(404, "Brand not found")
+    return {"status": "deleted"}
+
+
+@app.post("/brands/{brand_id}/set-default")
+async def make_brand_default(brand_id: str):
+    brand = await get_brand(brand_id)
+    if not brand:
+        raise HTTPException(404, "Brand not found")
+    await set_default_brand(brand_id)
+    return {"status": "default set"}
 
 
 # ── Agent Profiles ────────────────────────────────────────────────────────────

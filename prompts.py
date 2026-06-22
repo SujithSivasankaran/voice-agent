@@ -211,23 +211,25 @@ DEFAULT_BUSINESS_CONTEXT = """\
 • Memberships (only quote if asked): 3 months ₹35,000; 6 months ₹60,000; 1 year ₹80,000.
 """
 
-BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE HARRY'S FITCAMP FACTS ━━━"
+BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE BUSINESS FACTS ━━━"
 CALL_CONTROL_HEADING = "━━━ AUTHORITATIVE CALL ENDING RULES ━━━"
 CALLER_COMMUNICATION_HEADING = "━━━ AUTHORITATIVE CALLER COMMUNICATION RULES ━━━"
 TRIAL_BOOKING_HEADING = "━━━ AUTHORITATIVE TRIAL BOOKING RULES ━━━"
 
 
-def _attach_business_context(prompt: str) -> str:
-    """Give every call direction the same factual source of truth exactly once."""
+def _attach_business_context(prompt: str, facts: str = None, brand_name: str = "the business") -> str:
+    """Give every call direction the same factual source of truth exactly once.
+    facts defaults to the built-in Harry's context when a brand supplies none."""
     if BUSINESS_CONTEXT_HEADING in prompt:
         return prompt
+    facts = (facts or DEFAULT_BUSINESS_CONTEXT).strip()
     return (
         prompt.rstrip()
         + "\n\n"
         + BUSINESS_CONTEXT_HEADING
-        + "\nThese facts apply to every inbound, outbound, and campaign call. "
+        + f"\nThese facts about {brand_name} apply to every inbound, outbound, and campaign call. "
           "Use them to answer related questions confidently. If any other prompt text conflicts, these facts win.\n"
-        + DEFAULT_BUSINESS_CONTEXT.strip()
+        + facts
     )
 
 
@@ -247,7 +249,9 @@ def _attach_call_controls(prompt: str) -> str:
     )
 
 
-def _attach_caller_communication_rules(prompt: str) -> str:
+def _attach_caller_communication_rules(
+    prompt: str, assistant_name: str = "Tina", brand_name: str = "Harry's Fitcamp",
+) -> str:
     """Prevent disclosure of internal routing or delegitimizing the call channel."""
     if CALLER_COMMUNICATION_HEADING in prompt:
         return prompt
@@ -256,24 +260,33 @@ def _attach_caller_communication_rules(prompt: str) -> str:
         + "\n\n"
         + CALLER_COMMUNICATION_HEADING
         + "\nNever tell a caller to call a 'real number', another number, or call back directly. Never tell "
-          "them to speak to a 'real person' or 'human', and never imply that this number or Tina is not legitimate. "
+          f"them to speak to a 'real person' or 'human', and never imply that this number or {assistant_name} is not legitimate. "
           "Do not reveal phone numbers, fallback numbers, SIP/trunk details, providers, routing, or other system internals. "
           "If escalation is requested, say only: 'I can connect you with our team,' then use transfer_to_human. "
           "If transfer fails, apologize and offer to take a message using remember_details; do not provide an alternate number. "
-          "If asked whether you are AI, answer honestly: 'I'm Tina, Harry's Fitcamp's virtual assistant.'"
+          f"If asked whether you are AI, answer honestly: 'I'm {assistant_name}, {brand_name}'s virtual assistant.'"
     )
 
 
-def _attach_trial_booking_rules(prompt: str) -> str:
-    """Make location and atomic availability checks mandatory in every prompt."""
+def _attach_trial_booking_rules(prompt: str, booking_config: dict = None) -> str:
+    """Make location and atomic availability checks mandatory in every prompt.
+    Locations and duration come from the brand's booking_config (Harry's defaults
+    when unset)."""
     if TRIAL_BOOKING_HEADING in prompt:
         return prompt
+    cfg = booking_config or {}
+    locations = [str(loc).strip().upper() for loc in (cfg.get("locations") or ["ADAYAR", "ECR"]) if str(loc).strip()]
+    loc_phrase = " or ".join(locations) if locations else "the requested location"
+    try:
+        duration = int(cfg.get("duration_minutes") or 60)
+    except (TypeError, ValueError):
+        duration = 60
     return (
         prompt.rstrip()
         + "\n\n"
         + TRIAL_BOOKING_HEADING
-        + "\nBefore booking, collect and verbally confirm: caller name, phone number, location (ADAYAR or ECR), "
-          "date, and start time. Every trial is exactly one hour, and each location can hold only one trial "
+        + f"\nBefore booking, collect and verbally confirm: caller name, phone number, location ({loc_phrase}), "
+          f"date, and start time. Every trial is exactly {duration} minutes, and each location can hold only one trial "
           "per start time. ALWAYS call check_availability(date, time, location). If unavailable, present the "
           "returned alternatives and wait for the caller to choose; never book an alternative without confirmation. "
           "Only then call book_appointment(name, phone, date, time, location). Never claim a booking is confirmed "
@@ -284,15 +297,18 @@ def _attach_trial_booking_rules(prompt: str) -> str:
 def _fill_prompt_placeholders(
     template: str,
     lead_name: str,
-    business_name: str,
-    service_type: str,
+    brand_name: str = "Harry's Fitcamp",
+    assistant_name: str = "Tina",
+    service_type: str = "trial assessment session",
 ) -> str:
     """Replace only supported fields; generated prompts may contain unrelated braces."""
     clean_lead = lead_name.strip() if isinstance(lead_name, str) else ""
     values = {
         "lead_name": clean_lead or "there",
-        "business_name": "Harry's Fitcamp",
-        "service_type": "trial assessment session",
+        "business_name": brand_name or "Harry's Fitcamp",
+        "brand_name": brand_name or "Harry's Fitcamp",
+        "assistant_name": assistant_name or "Tina",
+        "service_type": service_type or "trial assessment session",
     }
     out = template
     for field, value in values.items():
@@ -309,42 +325,62 @@ def _fill_prompt_placeholders(
     return out
 
 
+def _brand_fields(brand: dict = None) -> tuple:
+    """Pull (name, assistant_name, facts, booking_config) from a brand dict,
+    using the built-in Harry's values for any unset field."""
+    brand = brand or {}
+    name = brand.get("name") or "Harry's Fitcamp"
+    assistant = brand.get("assistant_name") or "Tina"
+    facts = brand.get("business_context") or DEFAULT_BUSINESS_CONTEXT
+    booking = brand.get("booking_config_parsed") or {}
+    return name, assistant, facts, booking
+
+
 def build_prompt(
     lead_name: str = "there",
-    business_name: str = "Harry's Fitcamp",
-    service_type: str = "trial assessment session",
+    brand: dict = None,
     custom_prompt: str = None,
 ) -> str:
-    """Interpolate lead name into the prompt. business_name and service_type kept for API compatibility."""
-    template = custom_prompt if custom_prompt else COMPACT_OUTBOUND_SYSTEM_PROMPT
-    prompt = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
-    if not custom_prompt or "COMPACT_CALL_PROMPT" in prompt:
-        return prompt
+    """Build the outbound system prompt for a brand.
+
+    Base text is the call-specific custom/campaign prompt, else the brand's
+    outbound_prompt, else the compact built-in default. The brand's facts and
+    the universal call-control / communication / booking invariants are attached
+    once each (idempotently)."""
+    brand = brand or {}
+    brand_name, assistant_name, facts, booking_config = _brand_fields(brand)
+    base = custom_prompt or brand.get("outbound_prompt") or COMPACT_OUTBOUND_SYSTEM_PROMPT
+    prompt = _fill_prompt_placeholders(base, lead_name, brand_name, assistant_name)
     return _attach_trial_booking_rules(
-        _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(prompt)))
+        _attach_caller_communication_rules(
+            _attach_call_controls(_attach_business_context(prompt, facts, brand_name)),
+            assistant_name, brand_name,
+        ),
+        booking_config,
     )
 
 
 def build_inbound_prompt(
     lead_name: str = "there",
-    business_name: str = "Harry's Fitcamp",
-    service_type: str = "trial assessment session",
-    custom_prompt: str = None,
+    brand: dict = None,
     campaign_catalog: str = "",
 ) -> str:
-    """Build the lean inbound prompt with a small active-campaign index."""
-    template = custom_prompt if custom_prompt else INBOUND_SYSTEM_PROMPT
-    out = _fill_prompt_placeholders(template, lead_name, business_name, service_type)
+    """Build the inbound system prompt for a brand, with a small active-campaign
+    index. Base text is the brand's inbound_prompt, else the built-in default."""
+    brand = brand or {}
+    brand_name, assistant_name, facts, booking_config = _brand_fields(brand)
+    base = brand.get("inbound_prompt") or INBOUND_SYSTEM_PROMPT
+    out = _fill_prompt_placeholders(base, lead_name, brand_name, assistant_name)
     if campaign_catalog and campaign_catalog.strip():
         out += ("\n\nACTIVE CAMPAIGN INDEX (recognition only; retrieve details before answering)\n"
                 + campaign_catalog.strip())
-    # Custom inbound prompts may not contain the safety/booking invariants that
-    # the compact built-in prompt already includes.
-    if custom_prompt:
-        return _attach_trial_booking_rules(
-            _attach_caller_communication_rules(_attach_call_controls(_attach_business_context(out)))
-        )
-    return out
+    return _attach_trial_booking_rules(
+        _attach_caller_communication_rules(
+            _attach_call_controls(_attach_business_context(out, facts, brand_name)),
+            assistant_name, brand_name,
+        ),
+        booking_config,
+    )
 
 
 # ── Campaign prompt generation & assembly ───────────────────────────────────────
@@ -398,20 +434,45 @@ Return ONLY the full revised call script as plain text — no JSON, no markdown 
 """
 
 
+# Brand-neutral campaign flow. The brand's facts, booking rules, and identity are
+# attached downstream by build_prompt(), so this core must not hardcode any one
+# brand's locations, pricing, or name — otherwise they would leak across brands.
+GENERIC_CAMPAIGN_CORE = """\
+You are {assistant_name} calling on behalf of {brand_name}. Be warm, calm, and never pushy;
+speak at a relaxed, slightly-slower pace in short turns (one or two sentences).
+
+FLOW
+1. Confirm you are speaking with {lead_name}. If it is the wrong person, apologise and
+   end_call(wrong_number).
+2. Introduce yourself and ask if they have a moment.
+3. Explain the campaign offer below in at most three short sentences, then invite them to the
+   next step.
+4. To book, collect and verbally confirm the required details, call check_availability, and book
+   only a confirmed available slot. Claim a booking only after the tool returns BOOKING CONFIRMED.
+5. For details not covered here, call lookup_campaign. Never invent offer details.
+6. On a clear no, a closing cue, or a completed booking, give one short sign-off, let it finish,
+   then immediately call end_call with the correct outcome.
+
+STYLE
+Match the caller's language naturally. If they say hold on or go quiet, wait silently. Never reveal
+routing, providers, phone numbers, or other internal details.
+"""
+
+
 def assemble_outbound_prompt(
     campaign_name: str,
     campaign_summary: str = "",
     campaign_purpose: str = "",
 ) -> str:
-    """Build a bounded campaign prompt; other campaigns are retrieved on demand."""
+    """Build a bounded, brand-neutral campaign prompt; the brand's facts/booking
+    rules are attached later by build_prompt(). Other campaigns are retrieved on
+    demand via lookup_campaign."""
     name = " ".join((campaign_name or "Campaign").split())[:120]
     details = " ".join((campaign_summary or campaign_purpose or "").split())[:900]
     campaign = (
         "COMPACT_CALL_PROMPT\n"
         f"PRIMARY CAMPAIGN: {name}\n"
-        f"Use this as the call's focus: {details or 'Introduce the campaign briefly and offer a free trial.'}\n"
+        f"Use this as the call's focus: {details or 'Introduce the campaign briefly and invite them to the next step.'}\n"
         "Do not proactively discuss other campaigns. Use lookup_campaign only if the lead asks.\n\n"
     )
-    # Avoid repeating the marker while retaining the compact universal flow.
-    core = COMPACT_OUTBOUND_SYSTEM_PROMPT.replace("COMPACT_CALL_PROMPT\n", "", 1)
-    return campaign + core
+    return campaign + GENERIC_CAMPAIGN_CORE

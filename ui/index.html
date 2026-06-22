@@ -252,6 +252,7 @@
     <li><a href="#" data-page="appointments"><span class="ico">📅</span> Appointments</a></li>
     <li><a href="#" data-page="call-logs"><span class="ico">🗒️</span> Call Logs</a></li>
     <li><a href="#" data-page="crm"><span class="ico">👥</span> CRM</a></li>
+    <li><a href="#" data-page="brands"><span class="ico">🏷️</span> Brands</a></li>
     <li><a href="#" data-page="agent-profiles"><span class="ico">🤖</span> Agent Profiles</a></li>
     <li><a href="#" data-page="settings"><span class="ico">⚙️</span> Settings</a></li>
     <li><a href="#" data-page="live-logs"><span class="ico">📡</span> Live Logs</a></li>
@@ -343,6 +344,9 @@
       <div class="form-grid">
         <div class="form-group"><label>Phone Number *</label><input id="sc-phone" placeholder="+919876543210" /></div>
         <div class="form-group"><label>Lead Name</label><input id="sc-name" placeholder="Rahul Sharma" /></div>
+        <div class="form-group"><label>Brand</label>
+          <select id="sc-brand"><option value="">— Default brand —</option></select>
+        </div>
         <div class="form-group"><label>Campaign</label>
           <select id="sc-campaign"><option value="">— Default prompt —</option></select>
         </div>
@@ -369,6 +373,9 @@
       <div id="batch-file-name" style="margin-top:10px;color:var(--muted);font-size:12px"></div>
       <div class="form-grid" style="margin-top:18px">
         <div class="form-group"><label>Delay Between Calls (sec)</label><input id="bk-delay" type="number" value="3" min="0" /></div>
+        <div class="form-group"><label>Brand</label>
+          <select id="bk-brand"><option value="">— Default brand —</option></select>
+        </div>
         <div class="form-group"><label>Campaign</label>
           <select id="bk-campaign"><option value="">— Default prompt —</option></select>
         </div>
@@ -434,10 +441,14 @@
 <div class="page" id="page-call-logs">
   <h1>Call Logs</h1>
   <p class="subtitle">Every call dispatched through T-800</p>
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <label style="font-size:12px;color:var(--muted)">Brand</label>
+    <select id="calls-brand-filter" onchange="loadCalls(1)"><option value="">All brands</option></select>
+  </div>
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Time (IST)</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
+        <thead><tr><th>Time (IST)</th><th>Brand</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
         <tbody id="calls-body"></tbody>
       </table>
     </div>
@@ -461,6 +472,23 @@
       <table>
         <thead><tr><th>Name</th><th>Phone</th><th>Total Calls</th><th>Booked</th><th>Last Call</th><th>Last Outcome</th><th>Actions</th></tr></thead>
         <tbody id="crm-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- BRANDS -->
+<div class="page" id="page-brands">
+  <h1>Brands</h1>
+  <p class="subtitle">Each brand is a separate business — its own prompts, facts, booking setup, and inbound numbers</p>
+  <div style="margin-bottom:16px">
+    <button class="btn btn-primary" onclick="openNewBrandModal()">+ New Brand</button>
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Assistant</th><th>Inbound Numbers</th><th>Default</th><th>Actions</th></tr></thead>
+        <tbody id="brands-body"></tbody>
       </table>
     </div>
   </div>
@@ -523,6 +551,9 @@
   <div class="modal">
     <h2>New Campaign</h2>
     <div class="form-group"><label>Campaign Name *</label><input id="cmp-name" placeholder="June Dental Campaign" /></div>
+    <div class="form-group" style="margin-top:14px"><label>Brand</label>
+      <select id="cmp-brand"><option value="">— Default brand —</option></select>
+    </div>
     <div class="form-group" style="margin-top:14px">
       <label>Campaign Purpose ✨</label>
       <textarea id="cmp-purpose" rows="4" placeholder="Describe in plain English what this campaign is about — e.g. 'Offer a free dental check-up this June and book interested people for a slot.' The AI will write the call script from this."></textarea>
@@ -607,6 +638,67 @@
   </div>
 </div>
 
+<!-- Brand Modal -->
+<div class="modal-overlay" id="modal-brand">
+  <div class="modal" style="width:720px">
+    <h2 id="brand-modal-title">New Brand</h2>
+    <input type="hidden" id="br-edit-id" />
+    <div class="form-grid">
+      <div class="form-group"><label>Brand Name *</label><input id="br-name" placeholder="Harry's Fitcamp" /></div>
+      <div class="form-group"><label>Assistant Name</label><input id="br-assistant" placeholder="Tina" /></div>
+      <div class="form-group"><label>Voice (optional)</label>
+        <select id="br-voice">
+          <option value="">— default —</option>
+          <option value="Aoede">Aoede (F)</option>
+          <option value="Charon">Charon (M)</option>
+          <option value="Fenrir">Fenrir (M)</option>
+          <option value="Kore">Kore (F)</option>
+          <option value="Puck">Puck (M)</option>
+          <option value="Schedar">Schedar (F)</option>
+          <option value="Leda">Leda (F)</option>
+          <option value="Orus">Orus (M)</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Model (optional)</label>
+        <select id="br-model">
+          <option value="">— default —</option>
+          <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Inbound Numbers (comma-separated DIDs that route to this brand)</label>
+      <input id="br-numbers" placeholder="+914440001111, +914440002222" />
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Outbound Prompt (general outgoing calls — leave blank for built-in default)</label>
+      <textarea id="br-outbound" rows="5" placeholder="The default script the agent uses for this brand's outbound calls…"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Inbound Prompt (front-desk script for incoming calls — leave blank for built-in default)</label>
+      <textarea id="br-inbound" rows="5" placeholder="How the agent should answer when someone calls this brand…"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Business Facts (authoritative context used on every call)</label>
+      <textarea id="br-context" rows="4" placeholder="Key facts about this business: what it does, hours, offers, pricing…"></textarea>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Booking Config (JSON: locations, slot_times, duration_minutes, off_days, pricing_text)</label>
+      <textarea id="br-booking" rows="4" placeholder='{"locations":["ADAYAR","ECR"],"slot_times":["06:00","07:00"],"duration_minutes":60,"off_days":[6],"pricing_text":"…"}'></textarea>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Leave blank to use Harry's defaults. off_days uses weekday numbers (Mon=0 … Sun=6).</div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)">
+        <input type="checkbox" id="br-default" style="width:auto;accent-color:var(--accent)" /> Make this the default brand
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-brand')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveBrand()">Save Brand</button>
+    </div>
+  </div>
+</div>
+
 <!-- Contact History Modal -->
 <div class="modal-overlay" id="modal-contact">
   <div class="modal" style="width:640px">
@@ -674,6 +766,13 @@ async function responseError(response) {
   }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function toast(msg, ok=true) {
   const el = document.createElement('div');
@@ -701,11 +800,14 @@ function onPageLoad(page) {
   if (page === 'new-call')       {
     loadCampaignsIntoSelect('sc-campaign');
     loadCampaignsIntoSelect('bk-campaign');
+    loadBrandsIntoSelect('sc-brand');
+    loadBrandsIntoSelect('bk-brand');
   }
   if (page === 'campaigns')      { loadCampaigns(); loadDefaultPrompt(); }
   if (page === 'appointments')   { loadAppointments(); }
-  if (page === 'call-logs')      { loadCalls(1); }
+  if (page === 'call-logs')      { loadBrandFilter(); loadCalls(1); }
   if (page === 'crm')            { loadCRM(); }
+  if (page === 'brands')         { loadBrands(); }
   if (page === 'agent-profiles') { loadProfiles(); }
   if (page === 'settings')       { loadSettings(); }
   if (page === 'live-logs')      { loadLogs(); }
@@ -842,6 +944,7 @@ async function dispatchSingleCall() {
         lead_name: document.getElementById('sc-name').value.trim() || 'there',
         system_prompt: document.getElementById('sc-prompt').value.trim(),
         campaign_id: document.getElementById('sc-campaign').value,
+        brand_id: document.getElementById('sc-brand').value,
       }),
     });
     toast('Call dispatched to ' + phone);
@@ -861,6 +964,7 @@ async function dispatchBatch() {
   fd.append('file', batchFile);
   fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
   fd.append('campaign_id', document.getElementById('bk-campaign').value || '');
+  fd.append('brand_id', document.getElementById('bk-brand').value || '');
   try {
     const r = await fetch('/call/batch', { method: 'POST', body: fd });
     if (!r.ok) throw new Error(await responseError(r));
@@ -902,9 +1006,152 @@ async function loadCampaignsIntoSelect(selectId) {
   }
 }
 
+// ── Brands ──────────────────────────────────────────────────────────────────
+let brandsCache = {};   // id → name, used by the Call Logs brand column
+
+async function ensureBrands() {
+  if (Object.keys(brandsCache).length) return;
+  try {
+    const brands = await api('/brands');
+    brands.forEach(b => { brandsCache[b.id] = b.name; });
+  } catch(e) {}
+}
+
+async function loadBrandsIntoSelect(selectId) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const keep = select.querySelector('option[value=""]');
+  const defaultLabel = keep ? keep.textContent : '— Default brand —';
+  try {
+    const brands = await api('/brands');
+    select.innerHTML = `<option value="">${defaultLabel}</option>`;
+    brands.forEach(b => {
+      const o = document.createElement('option');
+      o.value = b.id;
+      o.textContent = b.name + (b.is_default ? ' (default)' : '');
+      select.appendChild(o);
+    });
+  } catch(e) { /* selector is optional */ }
+}
+
+async function loadBrands() {
+  try {
+    const brands = await api('/brands');
+    brandsCache = {};
+    brands.forEach(b => { brandsCache[b.id] = b.name; });
+    const tbody = document.getElementById('brands-body');
+    tbody.innerHTML = brands.map(b => {
+      let nums = [];
+      try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
+      const def = b.is_default
+        ? '<span class="badge badge-booked">Default</span>'
+        : `<button class="btn btn-outline btn-sm" onclick="setBrandDefault('${b.id}')">Set default</button>`;
+      return `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${esc(b.assistant_name || '—')}</td>
+        <td style="font-size:12px;color:var(--muted)">${nums.length ? nums.map(esc).join(', ') : '—'}</td>
+        <td>${def}</td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="openEditBrandModal('${b.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteBrand('${b.id}', '${esc(b.name).replace(/'/g, "\\'")}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" class="empty-state">No brands yet — create one above</td></tr>';
+  } catch(e) { toast('Could not load brands: ' + e.message, false); }
+}
+
+function _setBrandForm(b) {
+  document.getElementById('br-edit-id').value = b.id || '';
+  document.getElementById('br-name').value = b.name || '';
+  document.getElementById('br-assistant').value = b.assistant_name || '';
+  document.getElementById('br-voice').value = b.voice || '';
+  document.getElementById('br-model').value = b.model || '';
+  let nums = [];
+  try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
+  document.getElementById('br-numbers').value = nums.join(', ');
+  document.getElementById('br-outbound').value = b.outbound_prompt || '';
+  document.getElementById('br-inbound').value = b.inbound_prompt || '';
+  document.getElementById('br-context').value = b.business_context || '';
+  document.getElementById('br-booking').value = (b.booking_config && b.booking_config !== '{}') ? b.booking_config : '';
+  document.getElementById('br-default').checked = !!b.is_default;
+}
+
+function openNewBrandModal() {
+  document.getElementById('brand-modal-title').textContent = 'New Brand';
+  _setBrandForm({});
+  openModal('modal-brand');
+}
+
+async function openEditBrandModal(id) {
+  try {
+    const b = await api('/brands/' + id);
+    document.getElementById('brand-modal-title').textContent = 'Edit Brand';
+    _setBrandForm(b);
+    openModal('modal-brand');
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveBrand() {
+  const name = document.getElementById('br-name').value.trim();
+  if (!name) { toast('Brand name is required', false); return; }
+  const numbers = document.getElementById('br-numbers').value
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const bookingRaw = document.getElementById('br-booking').value.trim();
+  if (bookingRaw) {
+    try { JSON.parse(bookingRaw); }
+    catch { toast('Booking Config is not valid JSON', false); return; }
+  }
+  const payload = {
+    name,
+    assistant_name: document.getElementById('br-assistant').value.trim() || 'Tina',
+    inbound_numbers: numbers,
+    outbound_prompt: document.getElementById('br-outbound').value.trim(),
+    inbound_prompt: document.getElementById('br-inbound').value.trim(),
+    business_context: document.getElementById('br-context').value.trim(),
+    booking_config: bookingRaw || '{}',
+    voice: document.getElementById('br-voice').value,
+    model: document.getElementById('br-model').value,
+    is_default: document.getElementById('br-default').checked,
+  };
+  const id = document.getElementById('br-edit-id').value;
+  try {
+    if (id) await api('/brands/' + id, { method: 'PUT', body: JSON.stringify(payload) });
+    else    await api('/brands',       { method: 'POST', body: JSON.stringify(payload) });
+    toast('Brand saved');
+    closeModal('modal-brand');
+    loadBrands();
+  } catch(e) { toast('Save failed: ' + e.message, false); }
+}
+
+async function deleteBrand(id, name) {
+  if (!confirm(`Delete brand "${name}"? Existing calls and campaigns keep their history.`)) return;
+  try { await api('/brands/' + id, { method: 'DELETE' }); toast('Brand deleted'); loadBrands(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function setBrandDefault(id) {
+  try { await api(`/brands/${id}/set-default`, { method: 'POST' }); toast('Default brand set'); loadBrands(); }
+  catch(e) { toast(e.message, false); }
+}
+
+async function loadBrandFilter() {
+  const sel = document.getElementById('calls-brand-filter');
+  if (!sel) return;
+  try {
+    const brands = await api('/brands');
+    brandsCache = {};
+    brands.forEach(b => { brandsCache[b.id] = b.name; });
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">All brands</option>' +
+      brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    sel.value = cur;
+  } catch(e) {}
+}
+
 function openNewCampaignModal() {
   document.getElementById('cmp-name').value = '';
   document.getElementById('cmp-purpose').value = '';
+  loadBrandsIntoSelect('cmp-brand');
   openModal('modal-campaign');
 }
 
@@ -913,11 +1160,12 @@ async function createCampaign() {
   if (!name) { toast('Campaign name is required', false); return; }
 
   const purpose = document.getElementById('cmp-purpose').value.trim();
+  const brand_id = document.getElementById('cmp-brand').value;
 
   try {
     await api('/campaigns', {
       method: 'POST',
-      body: JSON.stringify({ name, purpose, contacts: [], schedule_type: 'manual' }),
+      body: JSON.stringify({ name, purpose, brand_id, contacts: [], schedule_type: 'manual' }),
     });
     toast(`Campaign created${purpose ? ' — writing script…' : ''}`);
     closeModal('modal-campaign');
@@ -1059,13 +1307,16 @@ let callsById = {};
 async function loadCalls(page=1) {
   callsPage = page;
   try {
-    const calls = await api(`/calls?page=${page}&limit=20`);
+    await ensureBrands();
+    const brandFilter = (document.getElementById('calls-brand-filter') || {}).value || '';
+    const calls = await api(`/calls?page=${page}&limit=20${brandFilter ? '&brand_id=' + encodeURIComponent(brandFilter) : ''}`);
     callsById = {};
     calls.forEach(c => { callsById[c.id] = c; });
     const tbody = document.getElementById('calls-body');
     tbody.innerHTML = calls.map(c => `
       <tr>
         <td>${fmtTime(c.timestamp)}</td>
+        <td style="font-size:12px;color:var(--muted)">${esc(brandsCache[c.brand_id] || '—')}</td>
         <td>${c.lead_name||'—'}</td>
         <td>${c.phone_number}</td>
         <td><span class="badge badge-${c.outcome}">${c.outcome||'—'}</span></td>
@@ -1075,7 +1326,7 @@ async function loadCalls(page=1) {
         </td>
         <td>${c.transcript ? `<button class="btn btn-outline btn-sm" onclick="viewTranscript('${c.id}')">📄 View</button>` : '—'}</td>
         <td>${c.recording_url ? `<a href="/calls/${c.id}/recording" target="_blank" style="color:var(--accent)">▶ Play</a>` : '—'}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="empty-state">No calls yet</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="9" class="empty-state">No calls yet</td></tr>';
     document.getElementById('calls-page-info').textContent = 'Page ' + page;
     document.getElementById('calls-prev').disabled = page <= 1;
     document.getElementById('calls-next').disabled = calls.length < 20;

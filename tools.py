@@ -28,10 +28,18 @@ async def _log(msg: str, detail: str = "", level: str = "info") -> None:
 class AppointmentTools(llm.ToolContext):
     """All function tools available to the appointment-booking agent."""
 
-    def __init__(self, ctx: agents.JobContext, phone_number: Optional[str] = None, lead_name: Optional[str] = None):
+    def __init__(
+        self, ctx: agents.JobContext, phone_number: Optional[str] = None,
+        lead_name: Optional[str] = None, booking_config: Optional[dict] = None,
+        brand_id: Optional[str] = None,
+    ):
         self.ctx = ctx
         self.phone_number = phone_number
         self.lead_name = lead_name
+        # Brand context: which business this call belongs to, and that brand's
+        # booking rules (locations / slot times / duration). Empty → Harry's defaults.
+        self.booking_config = booking_config or {}
+        self._brand_id = brand_id
         self._call_start_time = time.time()
         self._sip_domain = os.environ.get("VOBIZ_SIP_DOMAIN", "")
         self.recording_url: Optional[str] = None
@@ -115,14 +123,16 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def check_availability(self, date: str, time: str, location: str) -> str:
         """
-        Check a one-hour trial slot at a gym location before booking.
+        Check a trial slot at a location before booking.
         Call this after collecting date, time, and location.
-        location: ADAYAR or ECR | date: YYYY-MM-DD | time: HH:MM (24-hour)
+        location: one of the locations offered to the caller | date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            if await check_trial_slot(date, time, location):
-                return f"available: {date} at {time} in {location.upper()} for one hour"
-            alternatives = await get_next_available_trial_slots(date, time, location)
+            if await check_trial_slot(date, time, location, self._brand_id, self.booking_config):
+                return f"available: {date} at {time} in {location.upper()}"
+            alternatives = await get_next_available_trial_slots(
+                date, time, location, brand_id=self._brand_id, config=self.booking_config,
+            )
             choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
             return f"unavailable at {location.upper()}: suggest one of these next available times: {choices}"
         except ValueError as exc:
@@ -134,18 +144,22 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def book_appointment(self, name: str, phone: str, date: str, time: str, location: str) -> str:
         """
-        Atomically book a one-hour trial after the caller confirms every detail.
-        location: ADAYAR or ECR | date: YYYY-MM-DD | time: HH:MM (24-hour)
+        Atomically book a trial after the caller confirms every detail.
+        location: one of the locations offered to the caller | date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            booking_id = await insert_trial(name, phone, date, time, location)
+            booking_id = await insert_trial(
+                name, phone, date, time, location, self._brand_id, self.booking_config,
+            )
             self._booking_confirmed = True
             return (
-                f"BOOKING CONFIRMED. ID: {booking_id}. One-hour trial at "
+                f"BOOKING CONFIRMED. ID: {booking_id}. Trial at "
                 f"{location.upper()} on {date} at {time}."
             )
         except TrialSlotUnavailable:
-            alternatives = await get_next_available_trial_slots(date, time, location)
+            alternatives = await get_next_available_trial_slots(
+                date, time, location, brand_id=self._brand_id, config=self.booking_config,
+            )
             choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
             return f"NOT BOOKED: that slot was just taken. Ask the caller to choose from: {choices}."
         except ValueError as exc:
@@ -167,6 +181,7 @@ class AppointmentTools(llm.ToolContext):
                 phone_number=self.phone_number or "unknown",
                 lead_name=self.lead_name, outcome=outcome, reason=reason,
                 duration_seconds=duration, recording_url=self.recording_url,
+                brand_id=self._brand_id,
             )
             self._call_logged = True
         except Exception as exc:
@@ -228,6 +243,7 @@ class AppointmentTools(llm.ToolContext):
                     reason=reason,
                     duration_seconds=int(time.time() - self._call_start_time),
                     recording_url=self.recording_url,
+                    brand_id=self._brand_id,
                 )
                 self._call_logged = True
                 logger.info("Fallback call log saved (%s): %s", outcome, self.phone_number)
