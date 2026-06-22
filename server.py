@@ -176,6 +176,44 @@ async def _generate_brand_assets(description: str, brand_name: str, assistant_na
     return {}
 
 
+async def _refine_brand_assets(feedback: str, current: dict, brand_name: str, assistant_name: str) -> dict:
+    """Apply plain-English feedback to a brand's existing prompts via the LLM.
+    Returns the revised {business_context, outbound_prompt, inbound_prompt} or {}."""
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key or not feedback:
+        return {}
+    from prompts import BRAND_REFINE_INSTRUCTIONS
+    instr = BRAND_REFINE_INSTRUCTIONS.format(
+        feedback=feedback,
+        brand_name=brand_name or "the business",
+        assistant_name=assistant_name or "the assistant",
+        business_context=current.get("business_context") or "(none)",
+        outbound_prompt=current.get("outbound_prompt") or "(none)",
+        inbound_prompt=current.get("inbound_prompt") or "(none)",
+    )
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.models.generate_content(model=model, contents=instr)
+        )
+        text = (resp.text or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end + 1])
+            return {
+                "business_context": (data.get("business_context") or "").strip(),
+                "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
+                "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+            }
+    except Exception as exc:
+        logger.error("Brand prompt refine failed: %s", exc)
+        await log_error("server", f"Brand prompt refine failed: {exc}", brand_name, "error")
+    return {}
+
+
 async def _regenerate_campaign(campaign_id: str, pending_status: str = "generating") -> None:
     """Background task: (re)generate a campaign's outbound prompt + summary."""
     c = await get_campaign(campaign_id)
@@ -881,6 +919,31 @@ async def generate_brand_prompts(request: Request):
     )
     if not assets:
         raise HTTPException(502, "Could not generate prompts — please try again or write them manually")
+    return assets
+
+
+@app.post("/brands/refine")
+async def refine_brand_prompts(request: Request):
+    """Apply plain-English feedback to the brand's current prompts and return the
+    revised drafts for review."""
+    body = await request.json()
+    feedback = (body.get("feedback") or "").strip()
+    if not feedback:
+        raise HTTPException(400, "feedback is required")
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(503, "GOOGLE_API_KEY is not configured — cannot refine prompts")
+    assets = await _refine_brand_assets(
+        feedback,
+        {
+            "business_context": body.get("business_context") or "",
+            "outbound_prompt": body.get("outbound_prompt") or "",
+            "inbound_prompt": body.get("inbound_prompt") or "",
+        },
+        (body.get("name") or "").strip(),
+        (body.get("assistant_name") or "").strip(),
+    )
+    if not assets:
+        raise HTTPException(502, "Could not refine prompts — please try again")
     return assets
 
 

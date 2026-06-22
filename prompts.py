@@ -526,6 +526,32 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 """
 
 
+# Applies plain-English feedback to a brand's EXISTING prompts. The model must
+# change only what the feedback asks for and return the full text of all three
+# fields (unchanged ones returned as-is), so the editor can drop them straight in.
+BRAND_REFINE_INSTRUCTIONS = """You are refining the prompts for a voice AI phone agent named
+"{assistant_name}" for "{brand_name}". Apply the user's feedback to the CURRENT prompts below.
+Change ONLY what the feedback asks for and preserve everything else. Do NOT add generic rules about
+hanging up, not revealing internal details, or confirming bookings — those are added automatically.
+
+── Feedback to apply ──
+{feedback}
+
+── Current business facts ──
+{business_context}
+
+── Current outbound prompt ──
+{outbound_prompt}
+
+── Current inbound prompt ──
+{inbound_prompt}
+
+Return the FULL revised text for every field (return a field unchanged if the feedback doesn't touch it).
+Return ONLY valid JSON, no markdown, with exactly these keys:
+{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>"}}
+"""
+
+
 # Brand-neutral campaign flow. The brand's facts, booking rules, and identity are
 # attached downstream by build_prompt(), so this core must not hardcode any one
 # brand's locations, pricing, or name — otherwise they would leak across brands.
