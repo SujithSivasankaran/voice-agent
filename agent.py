@@ -303,7 +303,7 @@ def _build_session(
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
                     end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
-                    silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "200")),
+                    silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "300")),
                     prefix_padding_ms=200,
                 ),
             )
