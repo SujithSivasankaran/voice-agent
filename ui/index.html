@@ -1074,7 +1074,7 @@ async function loadCalls(page=1) {
           <input style="width:180px;font-size:12px;padding:4px 8px" value="${c.notes||''}" onblur="patchNotes('${c.id}',this.value)" placeholder="Add note…" />
         </td>
         <td>${c.transcript ? `<button class="btn btn-outline btn-sm" onclick="viewTranscript('${c.id}')">📄 View</button>` : '—'}</td>
-        <td>${c.recording_url ? `<a href="${c.recording_url}" target="_blank" style="color:var(--accent)">▶ Play</a>` : '—'}</td>
+        <td>${c.recording_url ? `<a href="/calls/${c.id}/recording" target="_blank" style="color:var(--accent)">▶ Play</a>` : '—'}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="empty-state">No calls yet</td></tr>';
     document.getElementById('calls-page-info').textContent = 'Page ' + page;
     document.getElementById('calls-prev').disabled = page <= 1;
@@ -1342,6 +1342,8 @@ const SETTINGS_SCHEMA = [
     { key:'VOBIZ_SIP_DOMAIN',      label:'SIP Domain',      desc:'xxxxx.sip.vobiz.ai' },
     { key:'VOBIZ_USERNAME',        label:'Username',         desc:'' },
     { key:'VOBIZ_PASSWORD',        label:'Password',         desc:'', secret:true },
+    { key:'VOBIZ_AUTH_ID',         label:'API Auth ID',      desc:'MA_XXXXXXXX' },
+    { key:'VOBIZ_AUTH_TOKEN',      label:'API Auth Token',   desc:'', secret:true },
     { key:'VOBIZ_OUTBOUND_NUMBER', label:'Outbound Number',  desc:'+919876543210' },
     { key:'OUTBOUND_TRUNK_ID',     label:'Trunk ID',         desc:'ST_xxxxxx' },
     { key:'DEFAULT_TRANSFER_NUMBER', label:'Transfer Number', desc:'+919876543210' },
@@ -1366,6 +1368,7 @@ const SETTINGS_SCHEMA = [
     { key:'S3_ENDPOINT_URL',      label:'Endpoint URL',     desc:'https://xxx.supabase.co/storage/v1/s3' },
     { key:'S3_REGION',            label:'Region',           desc:'ap-northeast-1' },
     { key:'S3_BUCKET',            label:'Bucket',           desc:'call-recordings' },
+    { key:'RECORDING_SYNC_SECONDS', label:'Sync interval',    desc:'60' },
   ]},
   { section: 'Deepgram (pipeline fallback STT)', keys: [
     { key:'DEEPGRAM_API_KEY', label:'API Key', desc:'xxx…', secret:true },

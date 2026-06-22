@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # load_dotenv(override=False) is a local-dev convenience only.
@@ -28,7 +28,7 @@ from db import (
     get_errors, get_logs, clear_errors,
     TrialSlotUnavailable, insert_trial, get_all_trials, cancel_trial,
     get_next_available_trial_slots,
-    get_all_calls, update_call_notes, get_contacts, get_calls_by_phone,
+    get_all_calls, get_call, update_call_notes, get_contacts, get_calls_by_phone,
     get_stats,
     create_campaign, get_all_campaigns, get_campaign, update_campaign_status,
     update_campaign_run_stats, delete_campaign,
@@ -39,6 +39,7 @@ from db import (
     update_agent_profile, delete_agent_profile, set_default_agent_profile,
 )
 from observability import langfuse_status
+from recordings import presigned_recording_url, recording_sync_status, sync_vobiz_recordings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-server")
@@ -305,6 +306,20 @@ def _schedule_campaign(campaign: dict) -> None:
 async def startup():
     init_db()
     scheduler.start()
+    try:
+        sync_seconds = max(30, int(os.environ.get("RECORDING_SYNC_SECONDS", "60")))
+    except ValueError:
+        sync_seconds = 60
+    scheduler.add_job(
+        sync_vobiz_recordings,
+        "interval",
+        seconds=sync_seconds,
+        id="vobiz_recording_sync",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+        next_run_time=datetime.now(),
+    )
     # Re-schedule any active campaigns on restart
     try:
         campaigns = await get_all_campaigns()
@@ -338,6 +353,7 @@ async def health():
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "langfuse": langfuse_status(),
+        "recordings": recording_sync_status(),
     }
 
 
@@ -497,6 +513,32 @@ async def cancel_appt(appointment_id: str):
 @app.get("/calls")
 async def list_calls(page: int = Query(1), limit: int = Query(20)):
     return await get_all_calls(page=page, limit=limit)
+
+
+@app.post("/calls/recordings/sync")
+async def sync_call_recordings():
+    """Manually trigger Vobiz-to-S3 reconciliation."""
+    try:
+        return await sync_vobiz_recordings()
+    except Exception as exc:
+        logger.exception("Manual recording sync failed")
+        raise HTTPException(502, f"Recording sync failed: {exc}") from exc
+
+
+@app.get("/calls/{call_id}/recording")
+async def play_call_recording(call_id: str):
+    call = await get_call(call_id)
+    if not call:
+        raise HTTPException(404, "Call not found")
+    recording_ref = call.get("recording_url") or ""
+    if not recording_ref:
+        raise HTTPException(404, "Recording is not available yet")
+    try:
+        url = await presigned_recording_url(recording_ref, expires_seconds=900)
+    except Exception as exc:
+        logger.exception("Could not sign recording URL for call %s", call_id)
+        raise HTTPException(502, "Could not prepare recording playback") from exc
+    return RedirectResponse(url=url, status_code=307)
 
 
 @app.patch("/calls/{call_id}/notes")

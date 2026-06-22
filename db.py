@@ -26,7 +26,7 @@ SENSITIVE_KEYS = {
     "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "GOOGLE_API_KEY",
     "VOBIZ_PASSWORD", "TWILIO_AUTH_TOKEN", "SUPABASE_SERVICE_KEY",
     "AWS_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY", "CALCOM_API_KEY",
-    "DEEPGRAM_API_KEY", "LANGFUSE_SECRET_KEY",
+    "DEEPGRAM_API_KEY", "LANGFUSE_SECRET_KEY", "VOBIZ_AUTH_TOKEN",
 }
 
 KNOWN_SETTINGS_KEYS = [
@@ -34,9 +34,11 @@ KNOWN_SETTINGS_KEYS = [
     "GOOGLE_API_KEY", "GEMINI_MODEL", "GEMINI_TTS_VOICE", "USE_GEMINI_REALTIME",
     "USE_LEGACY_DEFAULT_PROMPT",
     "VOBIZ_SIP_DOMAIN", "VOBIZ_USERNAME", "VOBIZ_PASSWORD",
+    "VOBIZ_AUTH_ID", "VOBIZ_AUTH_TOKEN",
     "VOBIZ_OUTBOUND_NUMBER", "OUTBOUND_TRUNK_ID", "DEFAULT_TRANSFER_NUMBER",
     "DEEPGRAM_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER",
     "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_ENDPOINT_URL", "S3_REGION", "S3_BUCKET",
+    "RECORDING_SYNC_SECONDS",
     "CALCOM_API_KEY", "CALCOM_EVENT_TYPE_ID", "CALCOM_TIMEZONE",
     "ENABLED_TOOLS",
     "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_HOST",
@@ -437,6 +439,31 @@ async def get_all_calls(page: int = 1, limit: int = 20) -> list:
     offset = (page - 1) * limit
     result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
     return result.data or []
+
+
+async def get_call(call_id: str) -> Optional[dict]:
+    db = await _adb()
+    result = await db.table("call_logs").select("*").eq("id", call_id).maybe_single().execute()
+    return result.data
+
+
+async def get_recent_calls_without_recording(limit: int = 200) -> list:
+    """Recent dashboard calls eligible for carrier-recording reconciliation."""
+    db = await _adb()
+    result = await (
+        db.table("call_logs").select("id, phone_number, timestamp, duration_seconds, recording_url")
+        .is_("recording_url", "null").order("timestamp", desc=True).limit(limit).execute()
+    )
+    return result.data or []
+
+
+async def set_call_recording(call_id: str, recording_ref: str) -> bool:
+    db = await _adb()
+    result = await (
+        db.table("call_logs").update({"recording_url": recording_ref})
+        .eq("id", call_id).execute()
+    )
+    return len(result.data or []) > 0
 
 
 async def get_calls_by_phone(phone: str) -> list:
