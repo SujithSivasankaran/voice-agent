@@ -202,8 +202,27 @@
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 1000; align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
   .modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; width: 540px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
+  .modal.modal-lg { width: 760px; }
   .modal h2 { margin-bottom: 20px; }
   .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Sectioned form (brand editor) */
+  .modal-head { margin-bottom: 20px; }
+  .modal-head h2 { margin-bottom: 4px; }
+  .modal-head .sub { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .fsec { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 20px; }
+  .fsec:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .fsec-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .fsec-h .t { font-size: 13.5px; font-weight: 700; color: var(--navy); letter-spacing: .2px; }
+  .fsec-h .h { font-size: 11.5px; color: var(--muted); }
+  .panel { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; background: var(--bg); }
+  .panel.accent { border-color: rgba(245,166,35,.55); background: rgba(245,166,35,.07); }
+  .panel + .panel, .fsec .form-group + .form-group, .fsec .panel + .form-group, .fsec .form-grid + .form-group { margin-top: 14px; }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; background: var(--bg); }
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip-row label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 5px 11px; cursor: pointer; }
+  .chip-row input { width: auto; accent-color: var(--accent); }
+  .modal-footer.sticky { position: sticky; bottom: -28px; z-index: 3; background: var(--card); margin: 20px -28px -28px; padding: 16px 28px; border-top: 1px solid var(--border); }
 
   /* Search */
   .search-bar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
@@ -675,71 +694,93 @@
 
 <!-- Brand Modal -->
 <div class="modal-overlay" id="modal-brand">
-  <div class="modal" style="width:720px">
-    <h2 id="brand-modal-title">New Brand</h2>
-    <div style="font-size:12px;color:var(--muted);margin:-4px 0 10px">
-      Empty prompt fields are pre-filled with the current default content — edit any field and save to customize this brand.
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2 id="brand-modal-title">New Brand</h2>
+      <div class="sub">Set up this brand's identity, prompts, and booking. Blank prompt fields use the current default — edit and Save to customize.</div>
     </div>
     <input type="hidden" id="br-edit-id" />
-    <div class="form-grid">
-      <div class="form-group"><label>Brand Name *</label><input id="br-name" placeholder="Harry's Fitcamp" /></div>
-      <div class="form-group"><label>Assistant Name</label><input id="br-assistant" placeholder="Tina" /></div>
-      <div class="form-group"><label>Voice (optional)</label>
-        <select id="br-voice">
-          <option value="">— default —</option>
-          <option value="Aoede">Aoede (F)</option>
-          <option value="Charon">Charon (M)</option>
-          <option value="Fenrir">Fenrir (M)</option>
-          <option value="Kore">Kore (F)</option>
-          <option value="Puck">Puck (M)</option>
-          <option value="Schedar">Schedar (F)</option>
-          <option value="Leda">Leda (F)</option>
-          <option value="Orus">Orus (M)</option>
-        </select>
-      </div>
-      <div class="form-group"><label>Model (optional)</label>
-        <select id="br-model">
-          <option value="">— default —</option>
-          <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
-        </select>
-      </div>
-    </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Inbound Numbers (comma-separated DIDs that route to this brand)</label>
-      <input id="br-numbers" placeholder="+914440001111, +914440002222" />
-    </div>
-    <div class="form-group" style="margin-top:14px;padding:12px;background:rgba(108,99,255,.08);border:1px solid var(--accent);border-radius:8px">
-      <label>✨ Don't want to write the prompts? Describe the business and let AI draft them</label>
-      <textarea id="br-describe" rows="3" placeholder="Plain English: what the business does, what the agent should do on calls, hours, offers, pricing, locations… e.g. 'A dental clinic in Bandra. The agent calls leads to book free check-ups, open 10am–7pm, one branch.'"></textarea>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
-        <button class="btn btn-primary btn-sm" onclick="generateBrandPrompts()">✨ Generate prompts</button>
-        <span id="br-gen-status" style="font-size:12px;color:var(--muted)"></span>
-      </div>
-      <div style="margin-top:10px;border-top:1px dashed var(--accent);padding-top:10px">
-        <label>💬 Already have prompts? Give feedback and AI will refine them</label>
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <input id="br-feedback" placeholder="e.g. 'shorter and friendlier', 'mention the free first session', 'also ask for their email'" style="flex:1" />
-          <button class="btn btn-outline btn-sm" onclick="refineBrandPrompts()">💬 Apply feedback</button>
+
+    <!-- Identity -->
+    <div class="fsec">
+      <div class="fsec-h"><span class="t">🏷️ Identity</span><span class="h">name, assistant &amp; voice</span></div>
+      <div class="form-grid">
+        <div class="form-group"><label>Brand Name *</label><input id="br-name" maxlength="80" placeholder="Harry's Fitcamp" /></div>
+        <div class="form-group"><label>Assistant Name</label><input id="br-assistant" maxlength="40" placeholder="Tina" /></div>
+        <div class="form-group"><label>Voice (optional)</label>
+          <select id="br-voice">
+            <option value="">— default —</option>
+            <option value="Aoede">Aoede (F)</option>
+            <option value="Charon">Charon (M)</option>
+            <option value="Fenrir">Fenrir (M)</option>
+            <option value="Kore">Kore (F)</option>
+            <option value="Puck">Puck (M)</option>
+            <option value="Schedar">Schedar (F)</option>
+            <option value="Leda">Leda (F)</option>
+            <option value="Orus">Orus (M)</option>
+          </select>
         </div>
-        <span id="br-refine-status" style="font-size:12px;color:var(--muted)"></span>
+        <div class="form-group"><label>Model (optional)</label>
+          <select id="br-model">
+            <option value="">— default —</option>
+            <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
+          </select>
+        </div>
       </div>
     </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Outbound Prompt (general outgoing calls — leave blank for built-in default)</label>
-      <textarea id="br-outbound" rows="5" placeholder="The default script the agent uses for this brand's outbound calls…"></textarea>
+
+    <!-- Inbound -->
+    <div class="fsec">
+      <div class="fsec-h"><span class="t">📞 Inbound routing</span><span class="h">numbers that ring this brand</span></div>
+      <div class="form-group">
+        <label>Inbound Numbers (comma-separated DIDs)</label>
+        <input id="br-numbers" placeholder="+914440001111, +914440002222" />
+      </div>
     </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Inbound Prompt (front-desk script for incoming calls — leave blank for built-in default)</label>
-      <textarea id="br-inbound" rows="5" placeholder="How the agent should answer when someone calls this brand…"></textarea>
+
+    <!-- Prompts -->
+    <div class="fsec">
+      <div class="fsec-h"><span class="t">💬 Conversation prompts</span><span class="h">what the agent says &amp; knows</span></div>
+      <div class="panel accent">
+        <label>✨ Don't want to write the prompts? Describe the business and let AI draft them</label>
+        <textarea id="br-describe" maxlength="1500" oninput="updateCharCount(this)" rows="3" placeholder="Plain English: what the business does, what the agent should do on calls, hours, offers, pricing, locations… e.g. 'A dental clinic in Bandra. The agent calls leads to book free check-ups, open 10am–7pm, one branch.'"></textarea>
+        <div id="br-describe-count" class="char-count" style="font-size:11px;color:var(--muted);text-align:right"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <button class="btn btn-primary btn-sm" onclick="generateBrandPrompts()">✨ Generate prompts</button>
+          <span id="br-gen-status" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div style="margin-top:12px;border-top:1px dashed rgba(245,166,35,.55);padding-top:12px">
+          <label>💬 Already have prompts? Give feedback and AI will refine them</label>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <input id="br-feedback" placeholder="e.g. 'shorter and friendlier', 'mention the free first session', 'also ask for their email'" style="flex:1" />
+            <button class="btn btn-outline btn-sm" onclick="refineBrandPrompts()">💬 Apply feedback</button>
+          </div>
+          <span id="br-refine-status" style="font-size:12px;color:var(--muted)"></span>
+          <button id="br-refine-undo" class="btn btn-outline btn-sm" style="display:none;margin-left:8px" onclick="undoBrandRefine()">↩ Undo</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Outbound Prompt <span style="text-transform:none;font-weight:400;color:var(--muted)">(general outgoing calls — blank uses the default)</span></label>
+        <textarea id="br-outbound" maxlength="8000" oninput="updateCharCount(this)" rows="5" placeholder="The default script the agent uses for this brand's outbound calls…"></textarea>
+        <div id="br-outbound-count" class="char-count" style="font-size:11px;color:var(--muted);text-align:right"></div>
+      </div>
+      <div class="form-group">
+        <label>Inbound Prompt <span style="text-transform:none;font-weight:400;color:var(--muted)">(front-desk script — blank uses the default)</span></label>
+        <textarea id="br-inbound" maxlength="8000" oninput="updateCharCount(this)" rows="5" placeholder="How the agent should answer when someone calls this brand…"></textarea>
+        <div id="br-inbound-count" class="char-count" style="font-size:11px;color:var(--muted);text-align:right"></div>
+      </div>
+      <div class="form-group">
+        <label>Business Facts <span style="text-transform:none;font-weight:400;color:var(--muted)">(used on every call)</span></label>
+        <textarea id="br-context" maxlength="4000" oninput="updateCharCount(this)" rows="4" placeholder="Key facts about this business: what it does, hours, offers, pricing…"></textarea>
+        <div id="br-context-count" class="char-count" style="font-size:11px;color:var(--muted);text-align:right"></div>
+      </div>
     </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Business Facts (authoritative context used on every call)</label>
-      <textarea id="br-context" rows="4" placeholder="Key facts about this business: what it does, hours, offers, pricing…"></textarea>
-    </div>
-    <div class="form-group" style="margin-top:14px">
-      <label>Booking setup</label>
-      <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg)">
-        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+
+    <!-- Booking -->
+    <div class="fsec">
+      <div class="fsec-h"><span class="t">📅 Booking setup</span><span class="h">how appointments work</span></div>
+      <div class="panel">
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <span style="font-size:12px;color:var(--muted)">When can people book?</span>
           <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="br-slotmode" value="fixed" onchange="onSlotModeChange()" style="width:auto;accent-color:var(--accent)"> Fixed times</label>
           <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="br-slotmode" value="open_hours" onchange="onSlotModeChange()" style="width:auto;accent-color:var(--accent)"> Any time within open hours</label>
@@ -753,53 +794,62 @@
           <div class="form-group"><label>Open until</label><input id="br-open-end" type="time" /></div>
           <div class="form-group"><label>Slot interval (min)</label><input id="br-interval" type="number" min="5" value="30" /></div>
         </div>
-        <div class="form-group" id="br-duration-group" style="margin-top:8px">
-          <label>Booking length (minutes) — how long each booking runs (the end time is the start + this). Used when no services are listed below.</label>
+        <div class="form-group" id="br-duration-group" style="margin-top:12px">
+          <label>Booking length (minutes) — end time is start + this; used when no services are listed</label>
           <input id="br-duration" type="number" min="5" value="60" style="width:120px" />
         </div>
-        <div class="form-group" style="margin-top:8px">
+        <div class="form-group" style="margin-top:12px">
           <label>Closed days</label>
-          <div id="br-offdays" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text)">
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="0" style="width:auto"> Mon</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="1" style="width:auto"> Tue</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="2" style="width:auto"> Wed</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="3" style="width:auto"> Thu</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="4" style="width:auto"> Fri</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="5" style="width:auto"> Sat</label>
-            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="6" style="width:auto"> Sun</label>
+          <div id="br-offdays" class="chip-row">
+            <label><input type="checkbox" class="br-off" value="0"> Mon</label>
+            <label><input type="checkbox" class="br-off" value="1"> Tue</label>
+            <label><input type="checkbox" class="br-off" value="2"> Wed</label>
+            <label><input type="checkbox" class="br-off" value="3"> Thu</label>
+            <label><input type="checkbox" class="br-off" value="4"> Fri</label>
+            <label><input type="checkbox" class="br-off" value="5"> Sat</label>
+            <label><input type="checkbox" class="br-off" value="6"> Sun</label>
           </div>
         </div>
-        <div class="form-group" style="margin-top:8px">
-          <label>Locations / branches (comma-separated; leave blank if a single place)</label>
+        <div class="form-group" style="margin-top:12px">
+          <label>Locations / branches (comma-separated; blank if a single place)</label>
           <input id="br-locations" placeholder="ADAYAR, ECR" />
         </div>
-        <div class="form-group" style="margin-top:8px">
-          <label>Services (name + minutes). Leave empty for a single default service.</label>
+        <div class="form-group" style="margin-top:12px">
+          <label>Services (name + minutes) — leave empty for a single default service</label>
           <div id="br-svc-rows"></div>
-          <button type="button" class="btn btn-outline btn-sm" onclick="addServiceRow()">+ Add service</button>
+          <button type="button" class="btn btn-outline btn-sm" style="align-self:flex-start" onclick="addServiceRow()">+ Add service</button>
         </div>
-        <div class="form-group" style="margin-top:8px">
+        <div class="form-group" style="margin-top:12px">
           <label>Bookable people / courts / rooms (each booked one at a time)</label>
           <div id="br-res-rows"></div>
-          <button type="button" class="btn btn-outline btn-sm" onclick="addResourceRow()">+ Add resource</button>
+          <button type="button" class="btn btn-outline btn-sm" style="align-self:flex-start" onclick="addResourceRow()">+ Add resource</button>
         </div>
-        <div class="form-group" id="br-capacity-group" style="margin-top:8px">
-          <label>Capacity per slot (0 = unlimited; e.g. 3 tennis courts). Ignored when resources are listed.</label>
+        <div class="form-group" id="br-capacity-group" style="margin-top:12px">
+          <label>Capacity per slot (0 = unlimited; e.g. 3 tennis courts) — ignored when resources are listed</label>
           <input id="br-capacity" type="number" min="0" value="1" style="width:120px" />
         </div>
-        <details style="margin-top:8px">
+        <details style="margin-top:12px">
           <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Advanced — raw JSON</summary>
           <textarea id="br-booking" rows="4" style="margin-top:6px" placeholder='{"slot_mode":"fixed","slot_times":["06:00"],"capacity_per_slot":1}'></textarea>
           <button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="applyBookingJson()">Apply JSON to fields</button>
         </details>
       </div>
     </div>
-    <div class="form-group" style="margin-top:14px">
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)">
-        <input type="checkbox" id="br-default" style="width:auto;accent-color:var(--accent)" /> Make this the default brand
-      </label>
+
+    <!-- Default -->
+    <div class="fsec">
+      <div class="switch-row">
+        <div>
+          <strong style="font-size:13px;color:var(--text)">Default brand</strong>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:2px">Answers calls with no brand set and inbound numbers that don't match another brand.</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);white-space:nowrap">
+          <input type="checkbox" id="br-default" style="width:auto;accent-color:var(--accent)" /> Make default
+        </label>
+      </div>
     </div>
-    <div class="modal-footer">
+
+    <div class="modal-footer sticky">
       <button class="btn btn-outline" onclick="closeModal('modal-brand')">Cancel</button>
       <button class="btn btn-primary" onclick="saveBrand()">Save Brand</button>
     </div>
@@ -1172,6 +1222,11 @@ function parseBrandBooking(brand) {
   try { return JSON.parse(brand.booking_config || '{}') || {}; } catch { return {}; }
 }
 
+function updateCharCount(el) {
+  const c = document.getElementById(el.id + '-count');
+  if (c && el.maxLength > 0) c.textContent = `${el.value.length} / ${el.maxLength}`;
+}
+
 // ── Brand booking builder (visual editor for booking_config) ──────────────────
 function _csv(s) { return (s || '').split(',').map(x => x.trim()).filter(Boolean); }
 
@@ -1357,6 +1412,11 @@ function _setBrandForm(b, def) {
   document.getElementById('br-gen-status').textContent = '';
   document.getElementById('br-feedback').value = '';
   document.getElementById('br-refine-status').textContent = '';
+  _refineBackup = null;
+  document.getElementById('br-refine-undo').style.display = 'none';
+  ['br-describe', 'br-outbound', 'br-inbound', 'br-context'].forEach(id => {
+    const e = document.getElementById(id); if (e) updateCharCount(e);
+  });
 }
 
 async function generateBrandPrompts() {
@@ -1381,30 +1441,50 @@ async function generateBrandPrompts() {
   }
 }
 
+let _refineBackup = null;
+
 async function refineBrandPrompts() {
   const feedback = document.getElementById('br-feedback').value.trim();
   if (!feedback) { toast('Type some feedback first', false); return; }
   const status = document.getElementById('br-refine-status');
   status.textContent = '💬 Applying feedback…';
+  // Snapshot the current prompts so a poor refine is one click away from undo.
+  const snapshot = {
+    outbound_prompt: document.getElementById('br-outbound').value,
+    inbound_prompt: document.getElementById('br-inbound').value,
+    business_context: document.getElementById('br-context').value,
+  };
   try {
     const r = await api('/brands/refine', { method: 'POST', body: JSON.stringify({
       feedback,
       name: document.getElementById('br-name').value.trim(),
       assistant_name: document.getElementById('br-assistant').value.trim(),
-      outbound_prompt: document.getElementById('br-outbound').value,
-      inbound_prompt: document.getElementById('br-inbound').value,
-      business_context: document.getElementById('br-context').value,
+      ...snapshot,
     })});
-    if (typeof r.outbound_prompt === 'string')  document.getElementById('br-outbound').value = r.outbound_prompt;
-    if (typeof r.inbound_prompt === 'string')   document.getElementById('br-inbound').value = r.inbound_prompt;
-    if (typeof r.business_context === 'string') document.getElementById('br-context').value = r.business_context;
+    if (typeof r.outbound_prompt === 'string')  { document.getElementById('br-outbound').value = r.outbound_prompt; updateCharCount(document.getElementById('br-outbound')); }
+    if (typeof r.inbound_prompt === 'string')   { document.getElementById('br-inbound').value = r.inbound_prompt; updateCharCount(document.getElementById('br-inbound')); }
+    if (typeof r.business_context === 'string') { document.getElementById('br-context').value = r.business_context; updateCharCount(document.getElementById('br-context')); }
     document.getElementById('br-feedback').value = '';
-    status.textContent = '✅ Updated — review the fields below, then Save.';
+    _refineBackup = snapshot;   // enable Undo
+    document.getElementById('br-refine-undo').style.display = '';
+    status.textContent = '✅ Updated — review the fields below, then Save (or Undo).';
     toast('Prompts updated');
   } catch(e) {
-    status.textContent = '';
+    status.textContent = '';   // failure leaves your prompts untouched
     toast('Refine failed: ' + e.message, false);
   }
+}
+
+function undoBrandRefine() {
+  if (!_refineBackup) return;
+  document.getElementById('br-outbound').value = _refineBackup.outbound_prompt;
+  document.getElementById('br-inbound').value = _refineBackup.inbound_prompt;
+  document.getElementById('br-context').value = _refineBackup.business_context;
+  ['br-outbound', 'br-inbound', 'br-context'].forEach(id => updateCharCount(document.getElementById(id)));
+  _refineBackup = null;
+  document.getElementById('br-refine-undo').style.display = 'none';
+  document.getElementById('br-refine-status').textContent = 'Reverted to the previous prompts.';
+  toast('Reverted');
 }
 
 async function openNewBrandModal() {

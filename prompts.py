@@ -215,6 +215,27 @@ BUSINESS_CONTEXT_HEADING = "━━━ AUTHORITATIVE BUSINESS FACTS ━━━"
 CALL_CONTROL_HEADING = "━━━ AUTHORITATIVE CALL ENDING RULES ━━━"
 CALLER_COMMUNICATION_HEADING = "━━━ AUTHORITATIVE CALLER COMMUNICATION RULES ━━━"
 TRIAL_BOOKING_HEADING = "━━━ AUTHORITATIVE TRIAL BOOKING RULES ━━━"
+DELIVERY_STYLE_HEADING = "━━━ AUTHORITATIVE DELIVERY & PACING RULES ━━━"
+
+
+def _attach_delivery_rules(prompt: str) -> str:
+    """Universal voice-delivery guidance attached to EVERY prompt, so every brand —
+    generated, hand-written, or default — speaks calmly, pauses, and takes turns,
+    regardless of what its own script says."""
+    if DELIVERY_STYLE_HEADING in prompt:
+        return prompt
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + DELIVERY_STYLE_HEADING
+        + "\nSpeak in a warm, calm, unhurried voice — a little slower than normal. Never rush or run "
+          "sentences together. Keep each turn to one or two short sentences; speak longer only when the "
+          "caller asks you to explain something. After you ask a question, STOP and wait for the caller "
+          "to reply — never answer for them or keep talking. Leave a brief pause between ideas. If the "
+          "caller pauses, says 'hold on', or goes quiet, wait silently and never talk over them. Greet "
+          "once at the start, then let the caller respond before you continue. Address the caller only "
+          "by the name you were given for this call — never guess or use a different name."
+    )
 
 
 def _attach_business_context(prompt: str, facts: str = None, brand_name: str = "the business") -> str:
@@ -455,6 +476,7 @@ def _finish_prompt(out, brand_name, assistant_name, facts, booking_config, attac
     """Attach the universal invariants once each (idempotent). Business facts and
     trial-booking rules are skipped when a neutral brand has none, so it never gets
     Harry's facts or ADAYAR/ECR locations bolted on."""
+    out = _attach_delivery_rules(out)
     out = _attach_call_controls(out)
     if facts and facts.strip():
         out = _attach_business_context(out, facts, brand_name)
@@ -537,31 +559,44 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 # to them correctly. Generic hang-up / disclosure / booking-confirmation rules are
 # attached automatically at call time, so the generated prompts must NOT restate
 # them — they should focus on persona, the offer, the conversation flow, and facts.
-BRAND_GEN_INSTRUCTIONS = """You are a prompt engineer for a voice AI phone agent. From a plain-English
-description of a business, write the agent's prompts. The agent is named "{assistant_name}" and the
-business is "{brand_name}".
+BRAND_GEN_INSTRUCTIONS = """You are an expert prompt engineer for a REAL-TIME VOICE phone agent. From a
+plain-English description of a business, write the agent's prompts. The agent is named "{assistant_name}"
+and the business is "{brand_name}".
 
-── Business description (what it does, how the agent should behave, hours, offers, pricing, locations) ──
+── Business description ──
 {description}
+
+GLOBAL RULES (apply to both scripts):
+- Names: when the script addresses the person on the call, write the literal token {{lead_name}} — it is
+  replaced with the real name at call time. NEVER invent, assume, or hard-code a specific person's name
+  (no "Priya", "Rahul", etc.). For the agent and business, use {assistant_name} and {brand_name}.
+- Voice delivery (this is spoken aloud, not read): warm, calm, unhurried, a little SLOWER than normal;
+  never rush or run sentences together. One or two SHORT sentences per turn. After asking a question,
+  STOP and wait for the answer — do not keep talking or answer for them. Pause between ideas; never talk
+  over the caller.
+- Facts: use only what's in the description; never invent prices, offers, addresses, or numbers.
 
 Produce THREE things:
 
-1. business_context — the authoritative FACTS the agent can rely on, as concise bullet points: what
-   the business does, its services/offers, hours, pricing, and locations. Include ONLY facts present
-   or clearly implied in the description. Do NOT invent specific prices, addresses, or numbers that
-   were not given.
+1. business_context — the authoritative FACTS as concise bullet points (what the business does,
+   services/offers, hours, pricing, locations). Only what is in or clearly implied by the description.
 
-2. outbound_prompt — the script/persona for calls the agent MAKES (outreach). Cover: who {assistant_name}
-   is and that they're calling for {brand_name}, the goal of the call, a natural short-turn flow
-   (confirm who they're speaking to, a brief value pitch, invite to the next step / booking), and a
-   couple of objection responses. Warm, calm, never pushy; one or two sentences per turn.
+2. outbound_prompt — the script for calls the agent MAKES, written as a NUMBERED step-by-step flow:
+   1) OPEN: greet and confirm identity — e.g. "Hi, am I speaking with {{lead_name}}?". Briefly handle
+      wrong person / voicemail / no-answer.
+   2) PERMISSION: introduce yourself as {assistant_name} from {brand_name} and ask if it's a good moment.
+   3) PITCH: explain the offer in two or three short sentences — value, not a monologue.
+   4) INVITE: propose the next step (e.g. a booking) and ask one easy question.
+   5) OBJECTIONS: list 2-3 objections likely for THIS business, each with a short warm reply.
+   6) CLOSE: confirm the next step in one or two sentences.
+   Keep every turn short and pause for the caller's replies.
 
-3. inbound_prompt — how {assistant_name} answers INCOMING calls as the front desk for {brand_name}:
-   handle the caller's reason first, answer questions using the facts, help with bookings, and
-   escalate complex issues. Warm and concise.
+3. inbound_prompt — how {assistant_name} answers INCOMING calls as the front desk for {brand_name}. The
+   greeting is already spoken, so do not repeat it. Do NOT assume the caller's name — ask only if needed.
+   Handle the caller's reason first, answer using the facts, help with bookings, escalate complex issues.
 
-Do NOT restate generic rules about hanging up, not revealing internal details, or confirming bookings
-only after the tool succeeds — those are added automatically. Keep each prompt focused, not bloated.
+Do NOT restate generic rules about hanging up, revealing internal details, pacing, or confirming bookings
+only after the tool succeeds — those are added automatically. Keep each script focused, not bloated.
 
 Return ONLY valid JSON, no markdown, with exactly these keys:
 {{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>"}}
@@ -573,8 +608,10 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 # fields (unchanged ones returned as-is), so the editor can drop them straight in.
 BRAND_REFINE_INSTRUCTIONS = """You are refining the prompts for a voice AI phone agent named
 "{assistant_name}" for "{brand_name}". Apply the user's feedback to the CURRENT prompts below.
-Change ONLY what the feedback asks for and preserve everything else. Do NOT add generic rules about
-hanging up, not revealing internal details, or confirming bookings — those are added automatically.
+Change ONLY what the feedback asks for and preserve everything else. Keep the literal token {{lead_name}}
+wherever the person's name appears and NEVER replace it with a specific invented name. Do NOT add generic
+rules about hanging up, revealing internal details, pacing, or confirming bookings — those are added
+automatically.
 
 ── Feedback to apply ──
 {feedback}
