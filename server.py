@@ -109,6 +109,53 @@ async def _dispatch_call(phone: str, lead_name: str, meta: dict) -> bool:
 
 # ── Campaign prompt generation (background, LLM) ───────────────────────────────
 
+async def _gemini_json(instr: str) -> Optional[dict]:
+    """Call Gemini and return a parsed JSON object, robustly.
+
+    Uses JSON response mode (so the model can't wrap output in prose/markdown) and
+    a generous output-token limit (so long drafts aren't truncated into invalid
+    JSON), with a couple of retries for transient API errors. Returns None on
+    failure. This is the shared path for brand/campaign prompt generation, which
+    otherwise failed intermittently on malformed or truncated JSON."""
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return None
+    import google.genai as genai
+    model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
+    client = genai.Client(api_key=api_key)
+    # Build a JSON-mode config when the SDK supports it; fall back to plain text.
+    config = None
+    try:
+        from google.genai import types as gtypes
+        config = gtypes.GenerateContentConfig(
+            response_mime_type="application/json", max_output_tokens=8192, temperature=0.7,
+        )
+    except Exception:
+        config = None
+    loop = asyncio.get_event_loop()
+
+    def _call():
+        if config is not None:
+            return client.models.generate_content(model=model, contents=instr, config=config)
+        return client.models.generate_content(model=model, contents=instr)
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = await loop.run_in_executor(None, _call)
+            text = (getattr(resp, "text", "") or "").strip()
+            start, end = text.find("{"), text.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(text[start:end + 1])
+            last_err = "model returned no JSON object"
+        except Exception as exc:
+            last_err = str(exc)
+        if attempt < 2:
+            await asyncio.sleep(0.6 * (attempt + 1))
+    logger.warning("Gemini JSON generation failed after retries: %s", last_err)
+    return None
+
+
 async def _generate_campaign_assets(name: str, purpose: str, feedback_items: list, default_base: str = None):
     """Turn a campaign's purpose (+ cumulative feedback) into a full outbound script
     and a short summary, via the LLM. Returns (prompt, summary) or (None, None).
@@ -122,22 +169,10 @@ async def _generate_campaign_assets(name: str, purpose: str, feedback_items: lis
     instr = CAMPAIGN_GEN_INSTRUCTIONS.format(
         default_base=base, name=name, purpose=purpose, feedback=fb,
     )
-    try:
-        import google.genai as genai
-        client = genai.Client(api_key=api_key)
-        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None, lambda: client.models.generate_content(model=model, contents=instr)
-        )
-        text = (resp.text or "").strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            data = json.loads(text[start:end + 1])
-            return data.get("prompt"), data.get("summary")
-    except Exception as exc:
-        logger.error("Campaign prompt generation failed: %s", exc)
-        await log_error("server", f"Campaign prompt generation failed: {exc}", name, "error")
+    data = await _gemini_json(instr)
+    if data:
+        return data.get("prompt"), data.get("summary")
+    await log_error("server", "Campaign prompt generation failed", name, "error")
     return None, None
 
 
@@ -153,26 +188,14 @@ async def _generate_brand_assets(description: str, brand_name: str, assistant_na
         brand_name=brand_name or "the business",
         assistant_name=assistant_name or "the assistant",
     )
-    try:
-        import google.genai as genai
-        client = genai.Client(api_key=api_key)
-        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None, lambda: client.models.generate_content(model=model, contents=instr)
-        )
-        text = (resp.text or "").strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            data = json.loads(text[start:end + 1])
-            return {
-                "business_context": (data.get("business_context") or "").strip(),
-                "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
-                "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
-            }
-    except Exception as exc:
-        logger.error("Brand prompt generation failed: %s", exc)
-        await log_error("server", f"Brand prompt generation failed: {exc}", brand_name, "error")
+    data = await _gemini_json(instr)
+    if data:
+        return {
+            "business_context": (data.get("business_context") or "").strip(),
+            "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
+            "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+        }
+    await log_error("server", "Brand prompt generation failed", brand_name, "error")
     return {}
 
 
@@ -191,26 +214,14 @@ async def _refine_brand_assets(feedback: str, current: dict, brand_name: str, as
         outbound_prompt=current.get("outbound_prompt") or "(none)",
         inbound_prompt=current.get("inbound_prompt") or "(none)",
     )
-    try:
-        import google.genai as genai
-        client = genai.Client(api_key=api_key)
-        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None, lambda: client.models.generate_content(model=model, contents=instr)
-        )
-        text = (resp.text or "").strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            data = json.loads(text[start:end + 1])
-            return {
-                "business_context": (data.get("business_context") or "").strip(),
-                "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
-                "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
-            }
-    except Exception as exc:
-        logger.error("Brand prompt refine failed: %s", exc)
-        await log_error("server", f"Brand prompt refine failed: {exc}", brand_name, "error")
+    data = await _gemini_json(instr)
+    if data:
+        return {
+            "business_context": (data.get("business_context") or "").strip(),
+            "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
+            "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+        }
+    await log_error("server", "Brand prompt refine failed", brand_name, "error")
     return {}
 
 
