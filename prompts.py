@@ -269,42 +269,84 @@ def _attach_caller_communication_rules(
 
 
 def _attach_trial_booking_rules(prompt: str, booking_config: dict = None) -> str:
-    """Make atomic availability checks mandatory, and adapt the location handling
-    to how many locations the brand has:
-      - none configured → do not ask for a location at all;
-      - exactly one     → use it automatically; never ask which location;
-      - two or more     → ask which location.
-    """
+    """Build a booking-rules block from the brand's booking_config — what to ask
+    for (service / location / resource), how times work (fixed slots vs any time
+    within open hours), and the exact tool arguments to pass."""
     if TRIAL_BOOKING_HEADING in prompt:
         return prompt
     cfg = booking_config or {}
+
     locations = [str(loc).strip().upper() for loc in (cfg.get("locations") or []) if str(loc).strip()]
+    services = [s for s in (cfg.get("services") or []) if isinstance(s, dict) and str(s.get("name") or "").strip()]
+    resources = [str((r.get("name") if isinstance(r, dict) else r) or "").strip()
+                 for r in (cfg.get("resources") or [])
+                 if str((r.get("name") if isinstance(r, dict) else r) or "").strip()]
+    slot_times = [str(t) for t in (cfg.get("slot_times") or [])]
+    open_hours = cfg.get("open_hours") or {}
+    slot_mode = str(cfg.get("slot_mode") or "").strip().lower()
+    if slot_mode not in ("fixed", "open_hours"):
+        slot_mode = "open_hours" if (open_hours and not slot_times) else "fixed"
     try:
-        duration = int(cfg.get("duration_minutes") or 60)
+        default_duration = int(cfg.get("duration_minutes") or 60)
     except (TypeError, ValueError):
-        duration = 60
-    if not locations:
-        loc_rule = ("Do NOT ask the caller for a location. Collect and verbally confirm caller name, phone "
-                    "number, date, and start time, then call check_availability(date, time).")
-        book_call = "book_appointment(name, phone, date, time)"
-    elif len(locations) == 1:
-        only = locations[0]
-        loc_rule = (f"All bookings are at {only} — do NOT ask the caller which location. Collect and verbally "
-                    "confirm caller name, phone number, date, and start time, then call check_availability(date, time).")
-        book_call = "book_appointment(name, phone, date, time)"
-    else:
-        loc_phrase = " or ".join(locations)
-        loc_rule = (f"Ask which location ({loc_phrase}). Collect and verbally confirm caller name, phone number, "
-                    "location, date, and start time, then ALWAYS call check_availability(date, time, location).")
-        book_call = "book_appointment(name, phone, date, time, location)"
+        default_duration = 60
+    raw_cap = cfg.get("capacity_per_slot")
+    try:
+        capacity = 1 if raw_cap in (None, "") else max(0, int(raw_cap))
+    except (TypeError, ValueError):
+        capacity = 1
+
+    rules, collect, slot_args = [], ["caller name", "phone number"], ["date", "time"]
+
+    # Service
+    if len(services) >= 2:
+        svc_list = ", ".join(f"{s['name']} ({int(s.get('duration_minutes') or default_duration)} min)" for s in services)
+        rules.append(f"Ask which service the caller wants — options: {svc_list}.")
+        collect.insert(0, "service")
+        slot_args.append("service")
+    elif len(services) == 1:
+        s = services[0]
+        rules.append(f"The service is {s['name']} ({int(s.get('duration_minutes') or default_duration)} minutes).")
+
+    # Time model
+    if slot_mode == "open_hours" and open_hours.get("start") and open_hours.get("end"):
+        rules.append(f"A booking may start at any time between {open_hours['start']} and {open_hours['end']}, "
+                     "and lasts the service's duration.")
+    elif slot_times:
+        rules.append("Offer these start times: " + ", ".join(slot_times) + ".")
+
+    # Location
+    if len(locations) == 1:
+        rules.append(f"All bookings are at {locations[0]} — do NOT ask the caller which location.")
+    elif len(locations) >= 2:
+        rules.append(f"Ask which location: {' or '.join(locations)}.")
+        collect.append("location")
+        slot_args.append("location")
+    # (no locations → don't ask for one)
+
+    # Resource (named, pick-a-person)
+    if resources:
+        rules.append(f"Ask who/which they'd like — options: {', '.join(resources)} — or offer the first available.")
+        collect.append("the preferred person/court/room")
+        slot_args.append("resource")
+    elif capacity == 0:
+        rules.append("Several bookings can share the same time (no fixed cap) — just confirm availability.")
+    elif capacity > 1:
+        rules.append(f"Up to {capacity} bookings are allowed at the same time; the tool reports if a slot is full.")
+
+    check_args = ", ".join(slot_args)
+    book_args = ", ".join(["name", "phone"] + slot_args)
+    collect_sentence = "Collect and verbally confirm: " + ", ".join(collect + ["date", "and start time"]) + "."
+
     return (
         prompt.rstrip()
         + "\n\n"
         + TRIAL_BOOKING_HEADING
-        + f"\n{loc_rule} Every booking is {duration} minutes, and a slot can hold only one booking per start time. "
-          "If unavailable, present the returned alternatives and wait for the caller to choose; never book an "
-          f"alternative without confirmation. Only then call {book_call}. Never claim a booking is confirmed "
-          "unless the tool returns 'BOOKING CONFIRMED'."
+        + "\n" + " ".join(rules)
+        + f" {collect_sentence} ALWAYS call check_availability({check_args}) first. If unavailable, present the "
+          "returned alternatives and wait for the caller to choose; never book an alternative without confirmation. "
+          f"Only then call book_appointment({book_args}). Never claim a booking is confirmed unless the tool returns "
+          "'BOOKING CONFIRMED'."
     )
 
 

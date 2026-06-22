@@ -9,7 +9,8 @@ from livekit.agents import llm
 
 from db import (
     TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
-    insert_trial, normalize_trial_location, log_call, update_call_transcript, update_call_cost, log_error,
+    insert_trial, normalize_trial_location, resolve_service, find_booking_slot,
+    log_call, update_call_transcript, update_call_cost, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
     get_active_campaigns,
@@ -121,29 +122,48 @@ class AppointmentTools(llm.ToolContext):
             logger.warning("Campaign lookup failed: %s", exc)
             return "Campaign lookup is temporarily unavailable. Offer to record a callback request."
 
-    def _location_label(self, location: str) -> str:
-        """A ' in <LOCATION>' suffix for tool replies, or '' when this brand has no
-        locations. Resolves single-branch auto-fill so the reply names the branch."""
+    def _slot_label(self, location: str, service: str = "", resource: str = "") -> str:
+        """A human suffix for tool replies naming the service / resource / location
+        that actually applied (resolving single-branch and single-service auto-fill)."""
+        parts = []
+        try:
+            svc, _dur = resolve_service(service, self.booking_config)
+        except Exception:
+            svc = (service or "").strip()
+        if svc:
+            parts.append(svc)
+        if resource and str(resource).strip():
+            parts.append(f"with {str(resource).strip()}")
         try:
             loc = normalize_trial_location(location, self.booking_config)
         except Exception:
             loc = (location or "").strip().upper()
-        return f" in {loc}" if loc else ""
+        if loc:
+            parts.append(f"at {loc}")
+        return (" — " + ", ".join(parts)) if parts else ""
 
     @llm.function_tool
-    async def check_availability(self, date: str, time: str, location: str = "") -> str:
+    async def check_availability(
+        self, date: str, time: str, location: str = "", service: str = "", resource: str = "",
+    ) -> str:
         """
-        Check whether a slot is free before booking. Call after collecting date and time.
-        location is ONLY needed when the business has more than one location; omit it
-        otherwise (a single-location business is filled in automatically).
-        date: YYYY-MM-DD | time: HH:MM (24-hour)
+        Check whether a slot is free before booking. Call after collecting the details.
+        service: only when the business offers multiple services (use the named service).
+        location: only when the business has more than one location.
+        resource: only when the business lets the caller pick a person/court/room.
+        Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            where = self._location_label(location)
-            if await check_trial_slot(date, time, location, self._brand_id, self.booking_config):
-                return f"available: {date} at {time}{where}"
+            ok, assigned, _info = await find_booking_slot(
+                date, time, location, self._brand_id, self.booking_config, service, resource,
+            )
+            where = self._slot_label(location, service, resource or (assigned or ""))
+            if ok:
+                free_with = f" ({assigned} is free)" if (assigned and not resource) else ""
+                return f"available: {date} at {time}{where}{free_with}"
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
+                service=service, resource=resource,
             )
             choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"unavailable{where}: suggest one of these next available times: {choices}"
@@ -154,23 +174,29 @@ class AppointmentTools(llm.ToolContext):
             return "Unable to check availability right now. Do not claim the slot is available."
 
     @llm.function_tool
-    async def book_appointment(self, name: str, phone: str, date: str, time: str, location: str = "") -> str:
+    async def book_appointment(
+        self, name: str, phone: str, date: str, time: str,
+        location: str = "", service: str = "", resource: str = "",
+    ) -> str:
         """
         Atomically book the slot after the caller confirms every detail.
-        location is ONLY needed when the business has more than one location; omit it
-        otherwise (a single-location business is filled in automatically).
-        date: YYYY-MM-DD | time: HH:MM (24-hour)
+        service: only when the business offers multiple services.
+        location: only when the business has more than one location.
+        resource: only when the caller may pick a specific person/court/room.
+        Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
-            booking_id = await insert_trial(
+            result = await insert_trial(
                 name, phone, date, time, location, self._brand_id, self.booking_config,
+                service, resource,
             )
             self._booking_confirmed = True
-            where = self._location_label(location)
-            return f"BOOKING CONFIRMED. ID: {booking_id}. Booked{where} on {date} at {time}."
+            where = self._slot_label(result.get("location", ""), result.get("service", ""), result.get("resource", ""))
+            return f"BOOKING CONFIRMED. ID: {result['booking_id']}. Booked {date} at {time}{where}."
         except TrialSlotUnavailable:
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
+                service=service, resource=resource,
             )
             choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"NOT BOOKED: that slot was just taken. Ask the caller to choose from: {choices}."

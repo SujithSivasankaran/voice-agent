@@ -227,6 +227,12 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
             "slot_times": TRIAL_SLOT_TIMES,
             "duration_minutes": DEFAULT_TRIAL_DURATION_MINUTES,
             "off_days": DEFAULT_TRIAL_OFF_DAYS,
+            "slot_mode": "fixed",
+            "open_hours": {},
+            "slot_interval_minutes": 30,
+            "services": [],
+            "resources": (),
+            "capacity_per_slot": 1,
         }
     locations = tuple(
         str(loc).strip().upper()
@@ -240,11 +246,58 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
         duration = DEFAULT_TRIAL_DURATION_MINUTES
     off_days_raw = config.get("off_days")
     off_days = tuple(off_days_raw) if off_days_raw is not None else ()
+
+    # Services: each {name, duration_minutes}; duration falls back to the brand default.
+    services = []
+    for s in (config.get("services") or []):
+        if not isinstance(s, dict):
+            continue
+        nm = str(s.get("name") or "").strip()
+        if not nm:
+            continue
+        try:
+            d = int(s.get("duration_minutes") or duration)
+        except (TypeError, ValueError):
+            d = duration
+        services.append({"name": nm, "duration_minutes": d})
+
+    # Named, individually-bookable resources (stylists / courts / rooms).
+    resources = tuple(
+        str((r.get("name") if isinstance(r, dict) else r) or "").strip()
+        for r in (config.get("resources") or [])
+        if str((r.get("name") if isinstance(r, dict) else r) or "").strip()
+    )
+
+    open_hours = config.get("open_hours") or {}
+    slot_mode = str(config.get("slot_mode") or "").strip().lower()
+    if slot_mode not in ("fixed", "open_hours"):
+        slot_mode = "open_hours" if (open_hours and not slot_times) else "fixed"
+    try:
+        slot_interval = int(config.get("slot_interval_minutes") or 30)
+    except (TypeError, ValueError):
+        slot_interval = 30
+
+    # Pooled capacity: absent/blank → 1; explicit 0 → unlimited. Ignored in resource mode.
+    raw_cap = config.get("capacity_per_slot")
+    if raw_cap in (None, ""):
+        capacity = 1
+    else:
+        try:
+            capacity = max(0, int(raw_cap))
+        except (TypeError, ValueError):
+            capacity = 1
+
     return {
         "locations": locations,
         "slot_times": slot_times,
         "duration_minutes": duration,
         "off_days": off_days,
+        "slot_mode": slot_mode,
+        "open_hours": open_hours,
+        "slot_interval_minutes": slot_interval,
+        "services": services,
+        "resources": resources,
+        "capacity_per_slot": capacity,
     }
 
 
@@ -269,99 +322,276 @@ def normalize_trial_location(location: str, config: Optional[dict] = None) -> st
     return value
 
 
-def validate_trial_slot(
-    date: str, time: str, location: str, config: Optional[dict] = None,
-) -> tuple[str, str, str]:
+def _hhmm_to_min(value: str) -> int:
+    h, m = str(value).split(":")
+    return int(h) * 60 + int(m)
+
+
+def _min_to_hhmm(mins: int) -> str:
+    mins = max(0, int(mins))
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def _intervals_overlap(s1: int, e1: int, s2: int, e2: int) -> bool:
+    """Half-open [start, end) overlap test."""
+    return s1 < e2 and s2 < e1
+
+
+def resolve_service(service: str, config: Optional[dict] = None) -> tuple[str, int]:
+    """Return (canonical service name, duration_minutes). Name is "" when the brand
+    defines no services (a single default service of the brand's default duration).
+    Raises ValueError if a service is required but missing/unknown."""
+    cfg = resolve_booking_config(config)
+    services = cfg["services"]
+    if not services:
+        return "", cfg["duration_minutes"]
+    value = (service or "").strip().lower()
+    if not value:
+        if len(services) == 1:
+            return services[0]["name"], services[0]["duration_minutes"]
+        raise ValueError("please choose a service: " + ", ".join(s["name"] for s in services))
+    for s in services:
+        if s["name"].strip().lower() == value:
+            return s["name"], s["duration_minutes"]
+    raise ValueError("service must be one of: " + ", ".join(s["name"] for s in services))
+
+
+def resolve_resource(resource: str, config: Optional[dict] = None):
+    """Canonical resource name, "" when the brand has no named resources, or None
+    when resources exist but the caller didn't pick one (auto-assign the first free)."""
+    cfg = resolve_booking_config(config)
+    resources = cfg["resources"]
+    if not resources:
+        return ""
+    value = (resource or "").strip().lower()
+    if not value:
+        return None
+    for r in resources:
+        if r.strip().lower() == value:
+            return r
+    raise ValueError("must be one of: " + ", ".join(resources))
+
+
+def _prepare_booking(date, time, location, service, resource, config) -> dict:
+    """Validate + normalise a requested booking against the brand's rules. Returns
+    the resolved slot (with end_time and canonical service/resource/location) or
+    raises ValueError describing what to fix."""
     cfg = resolve_booking_config(config)
     location = normalize_trial_location(location, config)
+    svc_name, duration = resolve_service(service, config)
+    res = resolve_resource(resource, config)
     try:
-        slot = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        start_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError as exc:
         raise ValueError("date and time must use YYYY-MM-DD and HH:MM") from exc
-    if cfg["off_days"] and slot.weekday() in cfg["off_days"]:
+    if cfg["off_days"] and start_dt.weekday() in cfg["off_days"]:
         raise ValueError("bookings are unavailable on that day")
-    if cfg["slot_times"] and time not in cfg["slot_times"]:
-        raise ValueError("time must be one of: " + ", ".join(cfg["slot_times"]))
-    now = datetime.now(IST).replace(tzinfo=None)
-    if slot <= now:
+    start_min = _hhmm_to_min(time)
+    end_min = start_min + duration
+    if cfg["slot_mode"] == "fixed":
+        if cfg["slot_times"] and time not in cfg["slot_times"]:
+            raise ValueError("time must be one of: " + ", ".join(cfg["slot_times"]))
+    else:
+        oh = cfg["open_hours"]
+        if oh.get("start") and oh.get("end"):
+            o_start, o_end = _hhmm_to_min(oh["start"]), _hhmm_to_min(oh["end"])
+            if start_min < o_start or end_min > o_end:
+                raise ValueError(f"time must be within {oh['start']}-{oh['end']}")
+    if start_dt <= datetime.now(IST).replace(tzinfo=None):
         raise ValueError("the slot must be in the future")
-    return date, time, location
+    return {
+        "cfg": cfg, "date": date, "time": time, "end_time": _min_to_hhmm(end_min),
+        "location": location, "service": svc_name, "resource": res,
+        "duration": duration, "start_min": start_min, "end_min": end_min,
+    }
+
+
+def _row_interval(row: dict) -> tuple[int, int]:
+    """Booked [start, end) in minutes, using end_time or duration fallback."""
+    start = _hhmm_to_min(row.get("time") or "00:00")
+    end_time = row.get("end_time")
+    if end_time:
+        try:
+            return start, _hhmm_to_min(end_time)
+        except Exception:
+            pass
+    try:
+        dur = int(row.get("duration_minutes") or 0)
+    except (TypeError, ValueError):
+        dur = 0
+    return start, start + dur
+
+
+def _overlapping_rows(start_min: int, end_min: int, rows: list) -> list:
+    return [r for r in rows if _intervals_overlap(start_min, end_min, *_row_interval(r))]
+
+
+def _evaluate_availability(cfg, requested_resource, start_min, end_min, rows):
+    """Pure decision: is [start, end) bookable given the day's booked rows?
+    Returns (ok, assigned_resource). For resource mode, auto-assigns the first
+    free named resource when none was requested."""
+    overlapping = _overlapping_rows(start_min, end_min, rows)
+    if cfg["resources"]:
+        if requested_resource:
+            taken = any((r.get("resource") or "") == requested_resource for r in overlapping)
+            return (not taken, requested_resource if not taken else None)
+        for res in cfg["resources"]:
+            if not any((r.get("resource") or "") == res for r in overlapping):
+                return True, res
+        return False, None
+    cap = cfg["capacity_per_slot"]
+    if cap == 0:
+        return True, None
+    return (len(overlapping) < cap, None)
+
+
+async def _booked_rows(brand_id, date, location) -> list:
+    db = await _adb()
+    q = (
+        db.table("trials").select("id, time, end_time, duration_minutes, resource, created_at")
+        .eq("date", date).eq("status", "booked")
+    )
+    if brand_id:
+        q = q.eq("brand_id", brand_id)
+    if location:
+        q = q.eq("location", location)
+    return (await q.execute()).data or []
+
+
+async def find_booking_slot(date, time, location, brand_id=None, config=None, service=None, resource=None):
+    """Validate + check availability. Returns (ok, assigned_resource, info)."""
+    info = _prepare_booking(date, time, location, service, resource, config)
+    rows = await _booked_rows(brand_id, date, info["location"])
+    ok, assigned = _evaluate_availability(
+        info["cfg"], info["resource"], info["start_min"], info["end_min"], rows
+    )
+    return ok, assigned, info
 
 
 async def check_trial_slot(
     date: str, time: str, location: str,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
+    service: Optional[str] = None, resource: Optional[str] = None,
 ) -> bool:
-    """One active trial is allowed per brand/location/start time."""
-    date, time, location = validate_trial_slot(date, time, location, config)
-    db = await _adb()
-    query = (
-        db.table("trials").select("id")
-        .eq("date", date).eq("time", time).eq("location", location)
-        .eq("status", "booked")
-    )
-    if brand_id:
-        query = query.eq("brand_id", brand_id)
-    result = await query.limit(1).execute()
-    return not bool(result.data)
+    """True if the requested booking fits (capacity not full / a resource is free)."""
+    ok, _assigned, _info = await find_booking_slot(date, time, location, brand_id, config, service, resource)
+    return ok
+
+
+def _candidate_starts(cfg: dict, duration: int) -> list:
+    """Start times to try when suggesting alternatives: the fixed slot list, or
+    open-hours stepped by the configured interval and bounded by duration."""
+    if cfg["slot_mode"] == "open_hours":
+        oh = cfg["open_hours"]
+        if not (oh.get("start") and oh.get("end")):
+            return []
+        o_start, o_end = _hhmm_to_min(oh["start"]), _hhmm_to_min(oh["end"])
+        step = max(5, cfg["slot_interval_minutes"])
+        out, t = [], o_start
+        while t + duration <= o_end:
+            out.append(_min_to_hhmm(t))
+            t += step
+        return out
+    return list(cfg["slot_times"])
 
 
 async def get_next_available_trial_slots(
     date: str, time: str, location: str, limit: int = 3,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
+    service: Optional[str] = None, resource: Optional[str] = None,
 ) -> list[str]:
-    """Return the next valid trial starts at the requested location for a brand."""
+    """Next available start times for the requested service/location/resource."""
     cfg = resolve_booking_config(config)
-    location = normalize_trial_location(location, config)
+    try:
+        _svc, duration = resolve_service(service, config)
+    except ValueError:
+        duration = cfg["duration_minutes"]
     try:
         requested = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError:
         requested = datetime.now(IST).replace(tzinfo=None)
-    now = datetime.now(IST).replace(tzinfo=None)
-    start = max(requested, now)
+    start = max(requested, datetime.now(IST).replace(tzinfo=None))
     found: list[str] = []
     for day_offset in range(15):
         day = (start + timedelta(days=day_offset)).date()
-        if day.weekday() in cfg["off_days"]:
+        if cfg["off_days"] and day.weekday() in cfg["off_days"]:
             continue
-        for slot_time in cfg["slot_times"]:
+        for slot_time in _candidate_starts(cfg, duration):
             candidate = datetime.strptime(f"{day.isoformat()} {slot_time}", "%Y-%m-%d %H:%M")
             if candidate <= start:
                 continue
-            if await check_trial_slot(day.isoformat(), slot_time, location, brand_id, config):
-                found.append(f"{day.isoformat()} at {slot_time}")
-                if len(found) >= limit:
-                    return found
+            try:
+                if await check_trial_slot(day.isoformat(), slot_time, location, brand_id, config, service, resource):
+                    found.append(f"{day.isoformat()} at {slot_time}")
+                    if len(found) >= limit:
+                        return found
+            except ValueError:
+                continue
     return found
+
+
+def _survives_after_insert(cfg, info, our_id, assigned, rows) -> bool:
+    """Deterministic post-insert race guard: order overlapping booked rows by
+    (created_at, id) and keep only the first N that fit. Our row survives if it
+    falls within that allowed set, so concurrent over-bookings roll themselves back."""
+    overlapping = sorted(
+        _overlapping_rows(info["start_min"], info["end_min"], rows),
+        key=lambda r: (r.get("created_at") or "", r.get("id") or ""),
+    )
+    if cfg["resources"]:
+        same = [r for r in overlapping if (r.get("resource") or "") == (assigned or "")]
+        return bool(same) and same[0].get("id") == our_id
+    cap = cfg["capacity_per_slot"]
+    if cap == 0:
+        return True
+    return our_id in {r.get("id") for r in overlapping[:cap]}
 
 
 async def insert_trial(
     name: str, phone: str, date: str, time: str, location: str,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
-) -> str:
-    date, time, location = validate_trial_slot(date, time, location, config)
-    cfg = resolve_booking_config(config)
+    service: Optional[str] = None, resource: Optional[str] = None,
+) -> dict:
+    """Atomically book a slot. Returns the booking details (booking_id, service,
+    resource, time, end_time, location). Raises TrialSlotUnavailable if full."""
+    ok, assigned, info = await find_booking_slot(date, time, location, brand_id, config, service, resource)
+    if not ok:
+        raise TrialSlotUnavailable("that slot is fully booked")
+    cfg = info["cfg"]
     full_id = str(uuid.uuid4())
     booking_id = full_id[:8].upper()
     db = await _adb()
     row = {
         "id": full_id, "booking_id": booking_id,
         "name": name.strip(), "phone": phone.strip(),
-        "date": date, "time": time, "location": location,
-        "duration_minutes": cfg["duration_minutes"], "status": "booked",
-        "created_at": _now_iso(),
+        "date": info["date"], "time": info["time"], "end_time": info["end_time"],
+        "location": info["location"], "duration_minutes": info["duration"],
+        "status": "booked", "created_at": _now_iso(),
     }
+    if info["service"]:
+        row["service"] = info["service"]
+    if assigned:
+        row["resource"] = assigned
     if brand_id:
         row["brand_id"] = brand_id
+    await db.table("trials").insert(row).execute()
+    # Post-insert re-check: if a concurrent booking pushed this slot over capacity
+    # (or grabbed our resource), roll ours back so exactly the allowed number stand.
     try:
-        await db.table("trials").insert(row).execute()
-    except Exception as exc:
-        # The DB unique index is the final concurrency guard. Re-checking lets
-        # us distinguish a slot race from an unrelated database failure.
-        if not await check_trial_slot(date, time, location, brand_id, config):
-            raise TrialSlotUnavailable("trial slot was just booked") from exc
-        raise
-    return booking_id
+        rows = await _booked_rows(brand_id, info["date"], info["location"])
+        survives = _survives_after_insert(cfg, info, full_id, assigned, rows)
+    except Exception:
+        survives = True  # never fail a real booking over a re-check glitch
+    if not survives:
+        try:
+            await db.table("trials").update({"status": "cancelled"}).eq("id", full_id).execute()
+        except Exception:
+            pass
+        raise TrialSlotUnavailable("that slot was just booked")
+    return {
+        "booking_id": booking_id, "service": info["service"], "resource": assigned or "",
+        "location": info["location"], "time": info["time"], "end_time": info["end_time"],
+    }
 
 
 async def get_all_trials(date_filter: Optional[str] = None, brand_id: Optional[str] = None) -> list:

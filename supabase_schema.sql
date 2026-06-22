@@ -147,9 +147,18 @@ ALTER TABLE trials    ADD COLUMN IF NOT EXISTS brand_id TEXT;
 -- can define its own locations and trial duration.
 ALTER TABLE trials DROP CONSTRAINT IF EXISTS trials_location_check;
 ALTER TABLE trials DROP CONSTRAINT IF EXISTS trials_duration_minutes_check;
+
+-- Dynamic booking engine: a booking can name a service and a resource (stylist/
+-- court/room) and span a variable duration, so availability is interval+capacity
+-- based rather than one-per-exact-slot. The old exact-slot unique index can't
+-- express overlap/capacity/resources, so it is dropped; correctness is enforced
+-- in application logic (db.py) with a post-insert re-check.
+ALTER TABLE trials ADD COLUMN IF NOT EXISTS service  TEXT;
+ALTER TABLE trials ADD COLUMN IF NOT EXISTS resource TEXT;
+ALTER TABLE trials ADD COLUMN IF NOT EXISTS end_time TEXT;  -- HH:MM, for overlap checks
 DROP INDEX IF EXISTS idx_trials_booked_slot;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_trials_booked_slot
-ON trials (brand_id, location, date, time) WHERE status = 'booked';
+CREATE INDEX IF NOT EXISTS idx_trials_brand_date
+ON trials (brand_id, date) WHERE status = 'booked';
 
 -- Seed Harry's Fitcamp as the default brand. NULL prompt fields => the
 -- built-in prompts.py content is used, so nothing changes for Harry's.
