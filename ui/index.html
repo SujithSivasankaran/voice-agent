@@ -653,6 +653,14 @@
       <label>Inbound Numbers (comma-separated DIDs that route to this brand)</label>
       <input id="br-numbers" placeholder="+914440001111, +914440002222" />
     </div>
+    <div class="form-group" style="margin-top:14px;padding:12px;background:rgba(108,99,255,.08);border:1px solid var(--accent);border-radius:8px">
+      <label>✨ Don't want to write the prompts? Describe the business and let AI draft them</label>
+      <textarea id="br-describe" rows="3" placeholder="Plain English: what the business does, what the agent should do on calls, hours, offers, pricing, locations… e.g. 'A dental clinic in Bandra. The agent calls leads to book free check-ups, open 10am–7pm, one branch.'"></textarea>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+        <button class="btn btn-primary btn-sm" onclick="generateBrandPrompts()">✨ Generate prompts</button>
+        <span id="br-gen-status" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
     <div class="form-group" style="margin-top:14px">
       <label>Outbound Prompt (general outgoing calls — leave blank for built-in default)</label>
       <textarea id="br-outbound" rows="5" placeholder="The default script the agent uses for this brand's outbound calls…"></textarea>
@@ -1085,6 +1093,30 @@ function _setBrandForm(b, def) {
   document.getElementById('br-context').value = b.business_context || def.business_context || '';
   document.getElementById('br-booking').value = (b.booking_config && b.booking_config !== '{}') ? b.booking_config : '';
   document.getElementById('br-default').checked = !!b.is_default;
+  document.getElementById('br-describe').value = '';
+  document.getElementById('br-gen-status').textContent = '';
+}
+
+async function generateBrandPrompts() {
+  const description = document.getElementById('br-describe').value.trim();
+  if (!description) { toast('Describe the business first', false); return; }
+  const status = document.getElementById('br-gen-status');
+  status.textContent = '✨ Writing prompts…';
+  try {
+    const r = await api('/brands/generate', { method: 'POST', body: JSON.stringify({
+      description,
+      name: document.getElementById('br-name').value.trim(),
+      assistant_name: document.getElementById('br-assistant').value.trim(),
+    })});
+    if (r.outbound_prompt)  document.getElementById('br-outbound').value = r.outbound_prompt;
+    if (r.inbound_prompt)   document.getElementById('br-inbound').value = r.inbound_prompt;
+    if (r.business_context) document.getElementById('br-context').value = r.business_context;
+    status.textContent = '✅ Drafted — review/edit the fields below, then Save.';
+    toast('Prompts generated');
+  } catch(e) {
+    status.textContent = '';
+    toast('Generation failed: ' + e.message, false);
+  }
 }
 
 async function openNewBrandModal() {

@@ -141,6 +141,41 @@ async def _generate_campaign_assets(name: str, purpose: str, feedback_items: lis
     return None, None
 
 
+async def _generate_brand_assets(description: str, brand_name: str, assistant_name: str) -> dict:
+    """Turn a plain-English business description into the brand's three editable
+    prompt fields via the LLM. Returns {} on failure."""
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key or not description:
+        return {}
+    from prompts import BRAND_GEN_INSTRUCTIONS
+    instr = BRAND_GEN_INSTRUCTIONS.format(
+        description=description,
+        brand_name=brand_name or "the business",
+        assistant_name=assistant_name or "the assistant",
+    )
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.models.generate_content(model=model, contents=instr)
+        )
+        text = (resp.text or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end + 1])
+            return {
+                "business_context": (data.get("business_context") or "").strip(),
+                "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
+                "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+            }
+    except Exception as exc:
+        logger.error("Brand prompt generation failed: %s", exc)
+        await log_error("server", f"Brand prompt generation failed: {exc}", brand_name, "error")
+    return {}
+
+
 async def _regenerate_campaign(campaign_id: str, pending_status: str = "generating") -> None:
     """Background task: (re)generate a campaign's outbound prompt + summary."""
     c = await get_campaign(campaign_id)
@@ -822,6 +857,26 @@ async def brand_defaults():
 @app.get("/brands")
 async def list_brands():
     return await get_all_brands()
+
+
+@app.post("/brands/generate")
+async def generate_brand_prompts(request: Request):
+    """Write a brand's outbound/inbound/facts from a plain-English description, so
+    the user doesn't have to author prompts by hand. Returns the drafts for review."""
+    body = await request.json()
+    description = (body.get("description") or "").strip()
+    if not description:
+        raise HTTPException(400, "description is required")
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(503, "GOOGLE_API_KEY is not configured — cannot generate prompts")
+    assets = await _generate_brand_assets(
+        description,
+        (body.get("name") or "").strip(),
+        (body.get("assistant_name") or "").strip(),
+    )
+    if not assets:
+        raise HTTPException(502, "Could not generate prompts — please try again or write them manually")
+    return assets
 
 
 @app.get("/brands/{brand_id}")

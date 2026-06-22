@@ -490,6 +490,42 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 """
 
 
+# Turns a plain-English description of a business into the three editable brand
+# fields. The agent name and brand name are supplied so the generated text refers
+# to them correctly. Generic hang-up / disclosure / booking-confirmation rules are
+# attached automatically at call time, so the generated prompts must NOT restate
+# them — they should focus on persona, the offer, the conversation flow, and facts.
+BRAND_GEN_INSTRUCTIONS = """You are a prompt engineer for a voice AI phone agent. From a plain-English
+description of a business, write the agent's prompts. The agent is named "{assistant_name}" and the
+business is "{brand_name}".
+
+── Business description (what it does, how the agent should behave, hours, offers, pricing, locations) ──
+{description}
+
+Produce THREE things:
+
+1. business_context — the authoritative FACTS the agent can rely on, as concise bullet points: what
+   the business does, its services/offers, hours, pricing, and locations. Include ONLY facts present
+   or clearly implied in the description. Do NOT invent specific prices, addresses, or numbers that
+   were not given.
+
+2. outbound_prompt — the script/persona for calls the agent MAKES (outreach). Cover: who {assistant_name}
+   is and that they're calling for {brand_name}, the goal of the call, a natural short-turn flow
+   (confirm who they're speaking to, a brief value pitch, invite to the next step / booking), and a
+   couple of objection responses. Warm, calm, never pushy; one or two sentences per turn.
+
+3. inbound_prompt — how {assistant_name} answers INCOMING calls as the front desk for {brand_name}:
+   handle the caller's reason first, answer questions using the facts, help with bookings, and
+   escalate complex issues. Warm and concise.
+
+Do NOT restate generic rules about hanging up, not revealing internal details, or confirming bookings
+only after the tool succeeds — those are added automatically. Keep each prompt focused, not bloated.
+
+Return ONLY valid JSON, no markdown, with exactly these keys:
+{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>"}}
+"""
+
+
 # Brand-neutral campaign flow. The brand's facts, booking rules, and identity are
 # attached downstream by build_prompt(), so this core must not hardcode any one
 # brand's locations, pricing, or name — otherwise they would leak across brands.
