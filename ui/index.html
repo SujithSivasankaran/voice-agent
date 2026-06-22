@@ -753,6 +753,10 @@
           <div class="form-group"><label>Open until</label><input id="br-open-end" type="time" /></div>
           <div class="form-group"><label>Slot interval (min)</label><input id="br-interval" type="number" min="5" value="30" /></div>
         </div>
+        <div class="form-group" id="br-duration-group" style="margin-top:8px">
+          <label>Booking length (minutes) — how long each booking runs (the end time is the start + this). Used when no services are listed below.</label>
+          <input id="br-duration" type="number" min="5" value="60" style="width:120px" />
+        </div>
         <div class="form-group" style="margin-top:8px">
           <label>Closed days</label>
           <div id="br-offdays" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text)">
@@ -1182,14 +1186,22 @@ function onResourcesChange() {
   document.getElementById('br-capacity-group').style.display = has ? 'none' : '';
 }
 
+function onServicesChange() {
+  // When services are defined, each carries its own duration → hide the single
+  // default-duration field (it's only the length for the no-services case).
+  const has = document.querySelectorAll('#br-svc-rows .br-svc-row').length > 0;
+  document.getElementById('br-duration-group').style.display = has ? 'none' : '';
+}
+
 function addServiceRow(name = '', dur = '') {
   const row = document.createElement('div');
   row.className = 'br-svc-row';
   row.style = 'display:flex;gap:8px;margin-bottom:6px';
   row.innerHTML = `<input class="svc-name" placeholder="Service name" value="${esc(name)}" style="flex:1" />
     <input class="svc-dur" type="number" min="5" placeholder="min" value="${dur === '' ? '' : Number(dur)}" style="width:90px" />
-    <button type="button" class="btn btn-outline btn-sm" onclick="this.parentNode.remove()">✕</button>`;
+    <button type="button" class="btn btn-outline btn-sm" onclick="this.parentNode.remove(); onServicesChange()">✕</button>`;
   document.getElementById('br-svc-rows').appendChild(row);
+  onServicesChange();
 }
 
 function addResourceRow(name = '') {
@@ -1213,6 +1225,7 @@ function renderBookingBuilder(cfg) {
   document.getElementById('br-open-start').value = openH.start || '';
   document.getElementById('br-open-end').value = openH.end || '';
   document.getElementById('br-interval').value = cfg.slot_interval_minutes || 30;
+  document.getElementById('br-duration').value = cfg.duration_minutes || 60;
   const off = new Set((cfg.off_days || []).map(Number));
   document.querySelectorAll('.br-off').forEach(c => { c.checked = off.has(Number(c.value)); });
   document.getElementById('br-locations').value = (cfg.locations || []).join(', ');
@@ -1224,6 +1237,7 @@ function renderBookingBuilder(cfg) {
   document.getElementById('br-capacity').value = (cap === 0 || cap) ? cap : 1;
   onSlotModeChange();
   onResourcesChange();
+  onServicesChange();
 }
 
 function readBookingBuilder() {
@@ -1242,6 +1256,8 @@ function readBookingBuilder() {
   }
   const off = [...document.querySelectorAll('.br-off:checked')].map(c => Number(c.value));
   if (off.length) cfg.off_days = off;
+  // Default booking length (used when no services; also the fallback for a service row left blank).
+  cfg.duration_minutes = Number(document.getElementById('br-duration').value) || 60;
   const services = [...document.querySelectorAll('#br-svc-rows .br-svc-row')].map(row => ({
     name: row.querySelector('.svc-name').value.trim(),
     duration_minutes: Number(row.querySelector('.svc-dur').value) || 60,
