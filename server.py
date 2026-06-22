@@ -803,6 +803,29 @@ def _as_json_text(value, default: str) -> str:
         return default
 
 
+@app.get("/brand-defaults")
+async def brand_defaults():
+    """The effective fallback prompt content, so the Brands editor can pre-fill
+    empty fields. The default brand falls back to Harry's built-in content; a
+    non-default brand falls back to the neutral generic content."""
+    from prompts import (
+        COMPACT_OUTBOUND_SYSTEM_PROMPT, INBOUND_SYSTEM_PROMPT, DEFAULT_BUSINESS_CONTEXT,
+        GENERIC_OUTBOUND_PROMPT, GENERIC_INBOUND_PROMPT,
+    )
+    return {
+        "builtin": {
+            "outbound_prompt": COMPACT_OUTBOUND_SYSTEM_PROMPT,
+            "inbound_prompt": INBOUND_SYSTEM_PROMPT,
+            "business_context": DEFAULT_BUSINESS_CONTEXT,
+        },
+        "generic": {
+            "outbound_prompt": GENERIC_OUTBOUND_PROMPT,
+            "inbound_prompt": GENERIC_INBOUND_PROMPT,
+            "business_context": "",
+        },
+    }
+
+
 @app.get("/brands")
 async def list_brands():
     return await get_all_brands()

@@ -642,6 +642,9 @@
 <div class="modal-overlay" id="modal-brand">
   <div class="modal" style="width:720px">
     <h2 id="brand-modal-title">New Brand</h2>
+    <div style="font-size:12px;color:var(--muted);margin:-4px 0 10px">
+      Empty prompt fields are pre-filled with the current default content — edit any field and save to customize this brand.
+    </div>
     <input type="hidden" id="br-edit-id" />
     <div class="form-grid">
       <div class="form-group"><label>Brand Name *</label><input id="br-name" placeholder="Harry's Fitcamp" /></div>
@@ -1008,6 +1011,14 @@ async function loadCampaignsIntoSelect(selectId) {
 
 // ── Brands ──────────────────────────────────────────────────────────────────
 let brandsCache = {};   // id → name, used by the Call Logs brand column
+let brandDefaults = null;   // built-in / generic fallback content for the editor
+
+async function ensureBrandDefaults() {
+  if (brandDefaults) return brandDefaults;
+  try { brandDefaults = await api('/brand-defaults'); }
+  catch { brandDefaults = { builtin: {}, generic: {} }; }
+  return brandDefaults;
+}
 
 async function ensureBrands() {
   if (Object.keys(brandsCache).length) return;
@@ -1060,7 +1071,8 @@ async function loadBrands() {
   } catch(e) { toast('Could not load brands: ' + e.message, false); }
 }
 
-function _setBrandForm(b) {
+function _setBrandForm(b, def) {
+  def = def || {};
   document.getElementById('br-edit-id').value = b.id || '';
   document.getElementById('br-name').value = b.name || '';
   document.getElementById('br-assistant').value = b.assistant_name || '';
@@ -1069,24 +1081,29 @@ function _setBrandForm(b) {
   let nums = [];
   try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
   document.getElementById('br-numbers').value = nums.join(', ');
-  document.getElementById('br-outbound').value = b.outbound_prompt || '';
-  document.getElementById('br-inbound').value = b.inbound_prompt || '';
-  document.getElementById('br-context').value = b.business_context || '';
+  // Empty fields show the effective default so the user can see and customize it.
+  document.getElementById('br-outbound').value = b.outbound_prompt || def.outbound_prompt || '';
+  document.getElementById('br-inbound').value = b.inbound_prompt || def.inbound_prompt || '';
+  document.getElementById('br-context').value = b.business_context || def.business_context || '';
   document.getElementById('br-booking').value = (b.booking_config && b.booking_config !== '{}') ? b.booking_config : '';
   document.getElementById('br-default').checked = !!b.is_default;
 }
 
-function openNewBrandModal() {
+async function openNewBrandModal() {
+  await ensureBrandDefaults();
   document.getElementById('brand-modal-title').textContent = 'New Brand';
-  _setBrandForm({});
+  // A new brand is non-default until ticked → show the neutral generic defaults.
+  _setBrandForm({}, brandDefaults.generic);
   openModal('modal-brand');
 }
 
 async function openEditBrandModal(id) {
   try {
+    await ensureBrandDefaults();
     const b = await api('/brands/' + id);
     document.getElementById('brand-modal-title').textContent = 'Edit Brand';
-    _setBrandForm(b);
+    const def = b.is_default ? brandDefaults.builtin : brandDefaults.generic;
+    _setBrandForm(b, def);
     openModal('modal-brand');
   } catch(e) { toast(e.message, false); }
 }
