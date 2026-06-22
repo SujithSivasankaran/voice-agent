@@ -102,20 +102,22 @@ def _s3_client(cfg: dict[str, str]):
         aws_secret_access_key=cfg["secret_key"],
         endpoint_url=cfg["endpoint"] or None,
         region_name=cfg["region"],
-        config=Config(signature_version="s3v4"),
+        # Supabase and many S3-compatible endpoints require
+        # endpoint/bucket/key rather than bucket.endpoint/key.
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 
 
 async def sync_vobiz_recordings() -> dict[str, int]:
     """Copy newly completed Vobiz recordings to S3 and attach dashboard rows."""
     if _sync_lock.locked():
-        return {"fetched": 0, "archived": 0}
+        return {"fetched": 0, "archived": 0, "failed": 0}
     async with _sync_lock:
         cfg = _config()
         if not recording_sync_status()["vobiz_api_configured"]:
-            return {"fetched": 0, "archived": 0}
+            return {"fetched": 0, "archived": 0, "failed": 0}
         if not recording_sync_status()["s3_configured"]:
-            return {"fetched": 0, "archived": 0}
+            return {"fetched": 0, "archived": 0, "failed": 0}
 
         url = f"https://api.vobiz.ai/api/v1/Account/{cfg['auth_id']}/Recording/"
         headers = {
@@ -130,6 +132,7 @@ async def sync_vobiz_recordings() -> dict[str, int]:
             recordings = payload.get("objects", []) if isinstance(payload, dict) else []
             calls = await get_recent_calls_without_recording(limit=200)
             archived = 0
+            failed = 0
             assigned_call_ids: set[str] = set()
 
             for recording in recordings:
@@ -150,19 +153,32 @@ async def sync_vobiz_recordings() -> dict[str, int]:
                 key = f"vobiz-recordings/{call['id']}/{recording_id}.{extension}"
 
                 s3 = _s3_client(cfg)
-                await asyncio.to_thread(
-                    s3.put_object,
-                    Bucket=cfg["bucket"],
-                    Key=key,
-                    Body=audio.content,
-                    ContentType=content_type,
-                )
+                try:
+                    await asyncio.to_thread(
+                        s3.put_object,
+                        Bucket=cfg["bucket"],
+                        Key=key,
+                        Body=audio.content,
+                        ContentType=content_type,
+                    )
+                except Exception as exc:
+                    failed += 1
+                    response = getattr(exc, "response", {}) or {}
+                    error = response.get("Error", {}) if isinstance(response, dict) else {}
+                    logger.error(
+                        "S3 recording upload failed (code=%s, message=%s, bucket=%s, endpoint=%s)",
+                        error.get("Code") or type(exc).__name__,
+                        error.get("Message") or str(exc),
+                        cfg["bucket"],
+                        cfg["endpoint"],
+                    )
+                    continue
                 if await set_call_recording(call["id"], f"s3://{cfg['bucket']}/{key}"):
                     assigned_call_ids.add(call["id"])
                     archived += 1
                     logger.info("Archived Vobiz recording for call %s", call["id"])
 
-        return {"fetched": len(recordings), "archived": archived}
+        return {"fetched": len(recordings), "archived": archived, "failed": failed}
 
 
 async def presigned_recording_url(recording_ref: str, expires_seconds: int = 900) -> str:

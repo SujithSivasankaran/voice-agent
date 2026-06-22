@@ -320,7 +320,7 @@
   <div class="card">
     <div class="table-wrap">
       <table id="tbl-recent">
-        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th></tr></thead>
+        <thead><tr><th>Time (IST)</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -423,7 +423,7 @@
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Time</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time (IST)</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
         <tbody id="appt-body"></tbody>
       </table>
     </div>
@@ -437,7 +437,7 @@
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
+        <thead><tr><th>Time (IST)</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
         <tbody id="calls-body"></tbody>
       </table>
     </div>
@@ -824,7 +824,7 @@ async function exportRecentCalls() {
     const csv = [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `t800-calls-${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `t800-calls-${istDateStamp()}.csv`;
     a.click(); URL.revokeObjectURL(a.href);
     toast(`Exported ${calls.length} calls`);
   } catch(e) { toast('Export failed: ' + e.message, false); }
@@ -1172,7 +1172,7 @@ async function openContactModal(phone, name) {
     }
     if (data.calls && data.calls.length) {
       html += '<div><strong style="font-size:12px;color:var(--muted)">CALL HISTORY</strong>';
-      html += '<div class="table-wrap"><table style="margin-top:8px"><thead><tr><th>Time</th><th>Outcome</th><th>Duration</th><th>Notes</th></tr></thead><tbody>';
+      html += '<div class="table-wrap"><table style="margin-top:8px"><thead><tr><th>Time (IST)</th><th>Outcome</th><th>Duration</th><th>Notes</th></tr></thead><tbody>';
       html += data.calls.map(c => `<tr><td>${fmtTime(c.timestamp)}</td><td><span class="badge badge-${c.outcome}">${c.outcome}</span></td><td>${fmtDur(c.duration_seconds)}</td><td>${c.notes||''}</td></tr>`).join('');
       html += '</tbody></table></div></div>';
     }
@@ -1457,10 +1457,35 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+const IST_TIME_ZONE = 'Asia/Kolkata';
+
+function parseTimestamp(ts) {
+  if (!ts) return null;
+  let value = String(ts).trim();
+  // Historical backend timestamps were UTC but lacked a timezone suffix.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
+    value += 'Z';
+  }
+  const date = new Date(value);
+  return isNaN(date) ? null : date;
+}
+
 function fmtTime(ts) {
   if (!ts) return '—';
-  const d = new Date(ts);
-  return isNaN(d) ? ts : d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  const d = parseTimestamp(ts);
+  return !d ? ts : d.toLocaleString('en-IN', {
+    timeZone: IST_TIME_ZONE,
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
+
+function istDateStamp() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function fmtDur(sec) {
@@ -1482,8 +1507,10 @@ function fmtCompact(n) {
 
 function fmtDayLabel(dateStr) {
   if (!dateStr) return '';
-  const d = new Date(dateStr + 'T00:00:00');
-  return isNaN(d) ? String(dateStr).slice(5) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return isNaN(d) ? String(dateStr).slice(5) : d.toLocaleDateString('en-IN', {
+    timeZone: IST_TIME_ZONE, month: 'short', day: 'numeric',
+  });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

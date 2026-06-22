@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
 
@@ -351,7 +352,7 @@ async def root():
 async def health():
     return {
         "status": "ok",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
         "langfuse": langfuse_status(),
         "recordings": recording_sync_status(),
     }

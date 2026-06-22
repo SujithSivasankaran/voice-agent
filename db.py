@@ -15,6 +15,13 @@ from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_iso() -> str:
+    """Timezone-aware current timestamp used by all persisted records."""
+    return datetime.now(IST).isoformat()
+
 # ── Env helpers ───────────────────────────────────────────────────────────────
 
 def _default(key: str, fallback: str = "") -> str:
@@ -117,7 +124,7 @@ async def set_setting(key: str, value: str) -> None:
     """Writes to Supabase for audit/display only. Does not affect runtime."""
     db = await _adb()
     await db.table("settings").upsert(
-        {"key": key, "value": value, "updated_at": datetime.now().isoformat()},
+        {"key": key, "value": value, "updated_at": _now_iso()},
         on_conflict="key",
     ).execute()
 
@@ -125,7 +132,7 @@ async def set_setting(key: str, value: str) -> None:
 async def save_settings(data: dict) -> None:
     """Writes to Supabase for audit/display only. Does not affect runtime."""
     db = await _adb()
-    updated_at = datetime.now().isoformat()
+    updated_at = _now_iso()
     rows = [
         {"key": k, "value": str(v), "updated_at": updated_at}
         for k, v in data.items()
@@ -173,7 +180,7 @@ async def get_default_feedback() -> list:
 async def append_default_feedback(text: str) -> list:
     import json
     items = await get_default_feedback()
-    items.append({"text": text, "at": datetime.now().isoformat()})
+    items.append({"text": text, "at": _now_iso()})
     await set_setting("DEFAULT_PROMPT_FEEDBACK", json.dumps(items))
     return items
 
@@ -202,7 +209,7 @@ async def log_error(source: str, message: str, detail: str = "", level: str = "e
             "level": level,
             "message": message[:500],
             "detail": detail[:2000],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _now_iso(),
         }).execute()
     except Exception:
         pass
@@ -316,7 +323,7 @@ async def insert_trial(name: str, phone: str, date: str, time: str, location: st
             "name": name.strip(), "phone": phone.strip(),
             "date": date, "time": time, "location": location,
             "duration_minutes": 60, "status": "booked",
-            "created_at": datetime.now().isoformat(),
+            "created_at": _now_iso(),
         }).execute()
     except Exception as exc:
         # The DB unique index is the final concurrency guard. Re-checking lets
@@ -351,7 +358,7 @@ async def insert_appointment(name: str, phone: str, date: str, time: str, servic
     await db.table("appointments").insert({
         "id": full_id, "name": name, "phone": phone,
         "date": date, "time": time, "service": service,
-        "status": "booked", "created_at": datetime.now().isoformat(),
+        "status": "booked", "created_at": _now_iso(),
     }).execute()
     return booking_id
 
@@ -371,7 +378,7 @@ async def get_next_available(date: str, time: str) -> str:
     try:
         dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError:
-        dt = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        dt = datetime.now(IST).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     for _ in range(7 * 24):
         dt += timedelta(hours=1)
         if 9 <= dt.hour < 18:
@@ -416,7 +423,7 @@ async def log_call(
     row: dict = {
         "id": call_id, "phone_number": phone_number, "lead_name": lead_name,
         "outcome": outcome, "reason": reason, "duration_seconds": duration_seconds,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _now_iso(),
     }
     if recording_url:
         row["recording_url"] = recording_url
@@ -517,7 +524,7 @@ async def get_stats() -> dict:
         ts = (r.get("timestamp") or "")[:10]
         if ts:
             daily[ts] += 1
-    today = datetime.now().date()
+    today = datetime.now(IST).date()
     timeline = [
         {"date": (today - timedelta(days=i)).isoformat(),
          "count": daily.get((today - timedelta(days=i)).isoformat(), 0)}
@@ -553,7 +560,7 @@ async def create_campaign(
         "id": campaign_id, "name": name, "status": "active",
         "contacts_json": contacts_json, "schedule_type": schedule_type,
         "schedule_time": schedule_time, "call_delay_seconds": call_delay_seconds,
-        "created_at": datetime.now().isoformat(), "total_dispatched": 0, "total_failed": 0,
+        "created_at": _now_iso(), "total_dispatched": 0, "total_failed": 0,
     }
     if system_prompt:
         row["system_prompt"] = system_prompt
@@ -603,7 +610,7 @@ async def append_campaign_feedback(campaign_id: str, feedback: str) -> list:
                 items = []
         except Exception:
             items = []
-    items.append({"text": feedback, "at": datetime.now().isoformat()})
+    items.append({"text": feedback, "at": _now_iso()})
     await db.table("campaigns").update({"feedback": json.dumps(items)}).eq("id", campaign_id).execute()
     return items
 
@@ -629,7 +636,7 @@ async def update_campaign_status(campaign_id: str, status: str) -> bool:
 async def update_campaign_run_stats(campaign_id: str, dispatched: int, failed: int) -> None:
     db = await _adb()
     await db.table("campaigns").update({
-        "last_run_at": datetime.now().isoformat(),
+        "last_run_at": _now_iso(),
         "total_dispatched": dispatched, "total_failed": failed, "status": "completed",
     }).eq("id", campaign_id).execute()
 
@@ -646,7 +653,7 @@ async def add_contact_memory(phone: str, insight: str) -> None:
     db = await _adb()
     await db.table("contact_memory").insert({
         "id": str(uuid.uuid4()), "phone_number": phone,
-        "insight": insight[:1000], "created_at": datetime.now().isoformat(),
+        "insight": insight[:1000], "created_at": _now_iso(),
     }).execute()
 
 
@@ -664,7 +671,7 @@ async def compress_contact_memory(phone: str, compressed: str) -> None:
     await db.table("contact_memory").delete().eq("phone_number", phone).execute()
     await db.table("contact_memory").insert({
         "id": str(uuid.uuid4()), "phone_number": phone,
-        "insight": compressed[:2000], "created_at": datetime.now().isoformat(),
+        "insight": compressed[:2000], "created_at": _now_iso(),
     }).execute()
 
 
@@ -700,7 +707,7 @@ async def create_agent_profile(
     await db.table("agent_profiles").insert({
         "id": profile_id, "name": name, "voice": voice, "model": model,
         "system_prompt": system_prompt, "enabled_tools": enabled_tools,
-        "is_default": 1 if is_default else 0, "created_at": datetime.now().isoformat(),
+        "is_default": 1 if is_default else 0, "created_at": _now_iso(),
     }).execute()
     return profile_id
 
