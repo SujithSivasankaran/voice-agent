@@ -626,8 +626,9 @@ async def entrypoint(ctx: agents.JobContext):
         )
         if estimated_cost is not None:
             logger.info("Estimated Gemini cost for %s: $%.6f", ctx.room.name, estimated_cost)
-            # Persist the cost on the call row so the dashboard can total spend.
-            await tools_instance.attach_cost(estimated_cost)
+        # Persist all-in spend (Gemini + telephony) on the call row. Called even
+        # when the Gemini estimate is unavailable, so telephony is still counted.
+        await tools_instance.attach_cost(estimated_cost)
         # Flush while the job process and exporter worker are still alive.
         # A LiveKit shutdown callback runs too late: OTEL's atexit handler may
         # already have stopped the BatchSpanProcessor by then.

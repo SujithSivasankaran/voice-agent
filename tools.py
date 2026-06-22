@@ -280,13 +280,26 @@ class AppointmentTools(llm.ToolContext):
         except Exception as exc:
             logger.warning("Could not save transcript for call %s: %s", self._call_id, exc)
 
-    async def attach_cost(self, estimated_cost) -> None:
-        """Store this call's estimated Gemini spend on the call_logs row, so the
-        dashboard can report total spend and cost per booking."""
-        if estimated_cost is None or not self._call_id:
+    async def attach_cost(self, gemini_cost) -> None:
+        """Store this call's all-in estimated spend (Gemini model + telephony) in
+        USD on the call_logs row, so the dashboard can report total spend and cost
+        per booking.
+
+        Telephony = call minutes × TELEPHONY_COST_PER_MIN_USD. Set that env var to
+        your Vobiz per-minute rate converted to USD (default ~$0.006 ≈ ₹0.50/min);
+        set it to 0 to count Gemini only. LiveKit is treated as free."""
+        if not self._call_id:
             return
         try:
-            await update_call_cost(self._call_id, float(estimated_cost))
+            total = float(gemini_cost or 0.0)
+            try:
+                rate = float(os.environ.get("TELEPHONY_COST_PER_MIN_USD", "0.006") or 0)
+            except ValueError:
+                rate = 0.0
+            if rate > 0:
+                minutes = max(0.0, time.time() - self._call_start_time) / 60.0
+                total += minutes * rate
+            await update_call_cost(self._call_id, round(total, 6))
         except Exception as exc:
             logger.warning("Could not save cost for call %s: %s", self._call_id, exc)
 
