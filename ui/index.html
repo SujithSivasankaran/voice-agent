@@ -458,7 +458,7 @@
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Time (IST)</th><th>Brand</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time (IST)</th><th>Brand</th><th>Service</th><th>Location</th><th>Resource</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
         <tbody id="appt-body"></tbody>
       </table>
     </div>
@@ -602,14 +602,23 @@
       <div class="form-group" style="grid-column:1/-1"><label>Brand *</label>
         <select id="appt-brand" onchange="onApptBrandChange()"></select>
       </div>
+      <div class="form-group" id="appt-service-group" style="display:none"><label>Service *</label>
+        <select id="appt-service"></select>
+      </div>
       <div class="form-group"><label>Name *</label><input id="appt-name" /></div>
       <div class="form-group"><label>Phone *</label><input id="appt-phone" placeholder="+919876543210" /></div>
       <div class="form-group"><label>Date *</label><input id="appt-date" type="date" /></div>
       <div class="form-group" id="appt-location-group"><label>Location *</label>
         <select id="appt-location"></select>
       </div>
-      <div class="form-group"><label>Start Time *</label>
+      <div class="form-group" id="appt-resource-group" style="display:none"><label>Person / court</label>
+        <select id="appt-resource"></select>
+      </div>
+      <div class="form-group" id="appt-time-fixed-group"><label>Start Time *</label>
         <select id="appt-time"></select>
+      </div>
+      <div class="form-group" id="appt-time-open-group" style="display:none"><label>Start Time *</label>
+        <input id="appt-time-open" type="time" />
       </div>
     </div>
     <div class="modal-footer">
@@ -728,9 +737,58 @@
       <textarea id="br-context" rows="4" placeholder="Key facts about this business: what it does, hours, offers, pricing…"></textarea>
     </div>
     <div class="form-group" style="margin-top:14px">
-      <label>Booking Config (JSON: locations, slot_times, duration_minutes, off_days, pricing_text)</label>
-      <textarea id="br-booking" rows="4" placeholder='{"locations":["ADAYAR","ECR"],"slot_times":["06:00","07:00"],"duration_minutes":60,"off_days":[6],"pricing_text":"…"}'></textarea>
-      <div style="font-size:11px;color:var(--muted);margin-top:4px">Leave blank to use Harry's defaults. off_days uses weekday numbers (Mon=0 … Sun=6).</div>
+      <label>Booking setup</label>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg)">
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <span style="font-size:12px;color:var(--muted)">When can people book?</span>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="br-slotmode" value="fixed" onchange="onSlotModeChange()" style="width:auto;accent-color:var(--accent)"> Fixed times</label>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="br-slotmode" value="open_hours" onchange="onSlotModeChange()" style="width:auto;accent-color:var(--accent)"> Any time within open hours</label>
+        </div>
+        <div class="form-group" id="br-fixed-block">
+          <label>Fixed start times (comma-separated, 24h)</label>
+          <input id="br-slottimes" placeholder="06:00, 07:00, 08:00, 16:30" />
+        </div>
+        <div class="form-grid" id="br-open-block" style="display:none">
+          <div class="form-group"><label>Open from</label><input id="br-open-start" type="time" /></div>
+          <div class="form-group"><label>Open until</label><input id="br-open-end" type="time" /></div>
+          <div class="form-group"><label>Slot interval (min)</label><input id="br-interval" type="number" min="5" value="30" /></div>
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label>Closed days</label>
+          <div id="br-offdays" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text)">
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="0" style="width:auto"> Mon</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="1" style="width:auto"> Tue</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="2" style="width:auto"> Wed</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="3" style="width:auto"> Thu</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="4" style="width:auto"> Fri</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="5" style="width:auto"> Sat</label>
+            <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" class="br-off" value="6" style="width:auto"> Sun</label>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label>Locations / branches (comma-separated; leave blank if a single place)</label>
+          <input id="br-locations" placeholder="ADAYAR, ECR" />
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label>Services (name + minutes). Leave empty for a single default service.</label>
+          <div id="br-svc-rows"></div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="addServiceRow()">+ Add service</button>
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label>Bookable people / courts / rooms (each booked one at a time)</label>
+          <div id="br-res-rows"></div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="addResourceRow()">+ Add resource</button>
+        </div>
+        <div class="form-group" id="br-capacity-group" style="margin-top:8px">
+          <label>Capacity per slot (0 = unlimited; e.g. 3 tennis courts). Ignored when resources are listed.</label>
+          <input id="br-capacity" type="number" min="0" value="1" style="width:120px" />
+        </div>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Advanced — raw JSON</summary>
+          <textarea id="br-booking" rows="4" style="margin-top:6px" placeholder='{"slot_mode":"fixed","slot_times":["06:00"],"capacity_per_slot":1}'></textarea>
+          <button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="applyBookingJson()">Apply JSON to fields</button>
+        </details>
+      </div>
     </div>
     <div class="form-group" style="margin-top:14px">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)">
@@ -1110,6 +1168,103 @@ function parseBrandBooking(brand) {
   try { return JSON.parse(brand.booking_config || '{}') || {}; } catch { return {}; }
 }
 
+// ── Brand booking builder (visual editor for booking_config) ──────────────────
+function _csv(s) { return (s || '').split(',').map(x => x.trim()).filter(Boolean); }
+
+function onSlotModeChange() {
+  const mode = (document.querySelector('input[name="br-slotmode"]:checked') || {}).value || 'fixed';
+  document.getElementById('br-fixed-block').style.display = mode === 'fixed' ? '' : 'none';
+  document.getElementById('br-open-block').style.display  = mode === 'open_hours' ? 'grid' : 'none';
+}
+
+function onResourcesChange() {
+  const has = document.querySelectorAll('#br-res-rows .res-name').length > 0;
+  document.getElementById('br-capacity-group').style.display = has ? 'none' : '';
+}
+
+function addServiceRow(name = '', dur = '') {
+  const row = document.createElement('div');
+  row.className = 'br-svc-row';
+  row.style = 'display:flex;gap:8px;margin-bottom:6px';
+  row.innerHTML = `<input class="svc-name" placeholder="Service name" value="${esc(name)}" style="flex:1" />
+    <input class="svc-dur" type="number" min="5" placeholder="min" value="${dur === '' ? '' : Number(dur)}" style="width:90px" />
+    <button type="button" class="btn btn-outline btn-sm" onclick="this.parentNode.remove()">✕</button>`;
+  document.getElementById('br-svc-rows').appendChild(row);
+}
+
+function addResourceRow(name = '') {
+  const row = document.createElement('div');
+  row.className = 'br-res-row';
+  row.style = 'display:flex;gap:8px;margin-bottom:6px';
+  row.innerHTML = `<input class="res-name" placeholder="e.g. Asha / Court 1" value="${esc(name)}" style="flex:1" />
+    <button type="button" class="btn btn-outline btn-sm" onclick="this.parentNode.remove(); onResourcesChange()">✕</button>`;
+  document.getElementById('br-res-rows').appendChild(row);
+  onResourcesChange();
+}
+
+function renderBookingBuilder(cfg) {
+  cfg = cfg || {};
+  const slotTimes = cfg.slot_times || [];
+  const openH = cfg.open_hours || {};
+  let mode = String(cfg.slot_mode || '').toLowerCase();
+  if (mode !== 'fixed' && mode !== 'open_hours') mode = (openH.start && !slotTimes.length) ? 'open_hours' : 'fixed';
+  document.querySelectorAll('input[name="br-slotmode"]').forEach(r => { r.checked = (r.value === mode); });
+  document.getElementById('br-slottimes').value = slotTimes.join(', ');
+  document.getElementById('br-open-start').value = openH.start || '';
+  document.getElementById('br-open-end').value = openH.end || '';
+  document.getElementById('br-interval').value = cfg.slot_interval_minutes || 30;
+  const off = new Set((cfg.off_days || []).map(Number));
+  document.querySelectorAll('.br-off').forEach(c => { c.checked = off.has(Number(c.value)); });
+  document.getElementById('br-locations').value = (cfg.locations || []).join(', ');
+  document.getElementById('br-svc-rows').innerHTML = '';
+  (cfg.services || []).forEach(s => addServiceRow(s.name || '', s.duration_minutes || ''));
+  document.getElementById('br-res-rows').innerHTML = '';
+  (cfg.resources || []).forEach(r => addResourceRow(typeof r === 'string' ? r : (r && r.name) || ''));
+  const cap = cfg.capacity_per_slot;
+  document.getElementById('br-capacity').value = (cap === 0 || cap) ? cap : 1;
+  onSlotModeChange();
+  onResourcesChange();
+}
+
+function readBookingBuilder() {
+  const mode = (document.querySelector('input[name="br-slotmode"]:checked') || {}).value || 'fixed';
+  const cfg = { slot_mode: mode };
+  const locations = _csv(document.getElementById('br-locations').value).map(x => x.toUpperCase());
+  if (locations.length) cfg.locations = locations;
+  if (mode === 'fixed') {
+    const st = _csv(document.getElementById('br-slottimes').value);
+    if (st.length) cfg.slot_times = st;
+  } else {
+    const start = document.getElementById('br-open-start').value;
+    const end = document.getElementById('br-open-end').value;
+    if (start && end) cfg.open_hours = { start, end };
+    cfg.slot_interval_minutes = Number(document.getElementById('br-interval').value) || 30;
+  }
+  const off = [...document.querySelectorAll('.br-off:checked')].map(c => Number(c.value));
+  if (off.length) cfg.off_days = off;
+  const services = [...document.querySelectorAll('#br-svc-rows .br-svc-row')].map(row => ({
+    name: row.querySelector('.svc-name').value.trim(),
+    duration_minutes: Number(row.querySelector('.svc-dur').value) || 60,
+  })).filter(s => s.name);
+  if (services.length) cfg.services = services;
+  const resources = [...document.querySelectorAll('#br-res-rows .res-name')]
+    .map(i => i.value.trim()).filter(Boolean).map(n => ({ name: n }));
+  if (resources.length) {
+    cfg.resources = resources;
+  } else {
+    const cap = Number(document.getElementById('br-capacity').value);
+    if (!Number.isNaN(cap)) cfg.capacity_per_slot = cap;
+  }
+  return cfg;
+}
+
+function applyBookingJson() {
+  const raw = document.getElementById('br-booking').value.trim();
+  if (!raw) { toast('Paste some JSON first', false); return; }
+  try { renderBookingBuilder(JSON.parse(raw)); toast('JSON applied to the fields above'); }
+  catch { toast('That is not valid JSON', false); }
+}
+
 async function populateBrandFilter(selectId) {
   await ensureBrands();
   const sel = document.getElementById(selectId);
@@ -1177,6 +1332,9 @@ function _setBrandForm(b, def) {
   document.getElementById('br-outbound').value = b.outbound_prompt || def.outbound_prompt || '';
   document.getElementById('br-inbound').value = b.inbound_prompt || def.inbound_prompt || '';
   document.getElementById('br-context').value = b.business_context || def.business_context || '';
+  let bcfg = {};
+  try { bcfg = JSON.parse(b.booking_config || '{}') || {}; } catch { bcfg = {}; }
+  renderBookingBuilder(bcfg);
   document.getElementById('br-booking').value = (b.booking_config && b.booking_config !== '{}') ? b.booking_config : '';
   document.getElementById('br-default').checked = !!b.is_default;
   document.getElementById('br-describe').value = '';
@@ -1257,11 +1415,7 @@ async function saveBrand() {
   if (!name) { toast('Brand name is required', false); return; }
   const numbers = document.getElementById('br-numbers').value
     .split(',').map(s => s.trim()).filter(Boolean);
-  const bookingRaw = document.getElementById('br-booking').value.trim();
-  if (bookingRaw) {
-    try { JSON.parse(bookingRaw); }
-    catch { toast('Booking Config is not valid JSON', false); return; }
-  }
+  const booking = readBookingBuilder();   // visual builder is the source of truth
   const payload = {
     name,
     assistant_name: document.getElementById('br-assistant').value.trim() || 'Tina',
@@ -1269,7 +1423,7 @@ async function saveBrand() {
     outbound_prompt: document.getElementById('br-outbound').value.trim(),
     inbound_prompt: document.getElementById('br-inbound').value.trim(),
     business_context: document.getElementById('br-context').value.trim(),
-    booking_config: bookingRaw || '{}',
+    booking_config: JSON.stringify(booking),
     voice: document.getElementById('br-voice').value,
     model: document.getElementById('br-model').value,
     is_default: document.getElementById('br-default').checked,
@@ -1422,13 +1576,16 @@ async function loadAppointments() {
     const tbody = document.getElementById('appt-body');
     tbody.innerHTML = appts.map(a => `
       <tr>
-        <td>${a.date}</td><td>${a.time}</td>
+        <td>${a.date}</td><td>${a.time}${a.end_time ? '–' + a.end_time : ''}</td>
         <td style="font-size:12px;color:var(--muted)">${esc(brandsCache[a.brand_id] || '—')}</td>
-        <td>${esc(a.location || '—')}</td><td>${esc(a.name)}</td><td>${esc(a.phone)}</td>
+        <td>${esc(a.service || '—')}</td>
+        <td>${esc(a.location || '—')}</td>
+        <td>${esc(a.resource || '—')}</td>
+        <td>${esc(a.name)}</td><td>${esc(a.phone)}</td>
         <td>${a.duration_minutes} min</td>
         <td><span class="badge badge-${a.status}">${a.status}</span></td>
         <td>${a.status==='booked' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppt('${a.id}')">Cancel</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="9" class="empty-state">No bookings</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="11" class="empty-state">No bookings</td></tr>';
   } catch(e) { toast(e.message, false); }
 }
 
@@ -1446,33 +1603,61 @@ async function openAddApptModal() {
   openModal('modal-appt');
 }
 
-// Populate the location + time fields from the selected brand's booking config.
+// Populate service / location / resource / time from the selected brand's config.
 function onApptBrandChange() {
   const cfg = parseBrandBooking(brandsFull[document.getElementById('appt-brand').value]);
+  const _show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+
+  // Services
+  const services = (cfg.services || []).filter(s => s && s.name);
+  const svcSel = document.getElementById('appt-service');
+  if (services.length) {
+    _show('appt-service-group', true);
+    svcSel.innerHTML = services.map(s => `<option value="${esc(s.name)}">${esc(s.name)} (${Number(s.duration_minutes) || 60} min)</option>`).join('');
+  } else { _show('appt-service-group', false); svcSel.innerHTML = ''; }
+
+  // Locations
   const locs = (cfg.locations || []).map(x => String(x).toUpperCase()).filter(Boolean);
-  const times = (cfg.slot_times && cfg.slot_times.length) ? cfg.slot_times : DEFAULT_APPT_TIMES;
-  const locGroup = document.getElementById('appt-location-group');
   const locSel = document.getElementById('appt-location');
   if (locs.length) {
-    locGroup.style.display = '';
+    _show('appt-location-group', true);
     locSel.innerHTML = locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  } else { _show('appt-location-group', false); locSel.innerHTML = ''; }
+
+  // Resources (named) — include an "Any available" auto-assign option
+  const res = (cfg.resources || []).map(r => typeof r === 'string' ? r : (r && r.name)).filter(Boolean);
+  const resSel = document.getElementById('appt-resource');
+  if (res.length) {
+    _show('appt-resource-group', true);
+    resSel.innerHTML = '<option value="">Any available</option>' + res.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  } else { _show('appt-resource-group', false); resSel.innerHTML = ''; }
+
+  // Time: fixed select vs open-hours free input
+  const slotTimes = cfg.slot_times || [];
+  const oh = cfg.open_hours || {};
+  let mode = String(cfg.slot_mode || '').toLowerCase();
+  if (mode !== 'fixed' && mode !== 'open_hours') mode = (oh.start && !slotTimes.length) ? 'open_hours' : 'fixed';
+  if (mode === 'open_hours') {
+    _show('appt-time-fixed-group', false); _show('appt-time-open-group', true);
   } else {
-    locGroup.style.display = 'none';   // no locations → don't ask for one
-    locSel.innerHTML = '';
+    _show('appt-time-fixed-group', true); _show('appt-time-open-group', false);
+    const times = slotTimes.length ? slotTimes : DEFAULT_APPT_TIMES;
+    document.getElementById('appt-time').innerHTML = times.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
   }
-  document.getElementById('appt-time').innerHTML =
-    times.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
 }
 
 async function createAppt() {
-  const usesLocation = document.getElementById('appt-location-group').style.display !== 'none';
+  const shown = id => document.getElementById(id).style.display !== 'none';
+  const openMode = shown('appt-time-open-group');
   const body = {
     brand_id: document.getElementById('appt-brand').value,
     name: document.getElementById('appt-name').value.trim(),
     phone: document.getElementById('appt-phone').value.trim(),
     date: document.getElementById('appt-date').value,
-    time: document.getElementById('appt-time').value,
-    location: usesLocation ? document.getElementById('appt-location').value : '',
+    time: openMode ? document.getElementById('appt-time-open').value : document.getElementById('appt-time').value,
+    location: shown('appt-location-group') ? document.getElementById('appt-location').value : '',
+    service: shown('appt-service-group') ? document.getElementById('appt-service').value : '',
+    resource: shown('appt-resource-group') ? document.getElementById('appt-resource').value : '',
   };
   if (!body.name || !body.phone || !body.date || !body.time) {
     toast('Name, phone, date and time are required', false); return;

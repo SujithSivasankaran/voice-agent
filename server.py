@@ -590,22 +590,28 @@ async def create_appointment(request: Request):
     resolved_brand_id = brand["id"] if brand else None
     config = _parse_booking_config(brand)
     location = body.get("location", "")
+    service = body.get("service", "")
+    resource = body.get("resource", "")
     try:
-        booking_id = await insert_trial(
+        result = await insert_trial(
             body["name"], body["phone"], body["date"], body["time"], location,
-            resolved_brand_id, config,
+            resolved_brand_id, config, service, resource,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except TrialSlotUnavailable as exc:
         alternatives = await get_next_available_trial_slots(
             body["date"], body["time"], location, brand_id=resolved_brand_id, config=config,
+            service=service, resource=resource,
         )
         raise HTTPException(409, {
             "message": "That slot is already booked",
             "alternatives": alternatives,
         }) from exc
-    return {"booking_id": booking_id, "status": "booked"}
+    return {
+        "booking_id": result["booking_id"], "status": "booked",
+        "service": result.get("service", ""), "resource": result.get("resource", ""),
+    }
 
 
 @app.delete("/appointments/{appointment_id}")
