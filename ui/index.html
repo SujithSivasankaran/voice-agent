@@ -1327,7 +1327,7 @@ async function loadBrands() {
         <td>${def}</td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="openEditBrandModal('${b.id}')">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteBrand('${b.id}', '${esc(b.name).replace(/'/g, "\\'")}')">Delete</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteBrand('${b.id}')">Delete</button>
         </td>
       </tr>`;
     }).join('') || '<tr><td colspan="5" class="empty-state">No brands yet — create one above</td></tr>';
@@ -1454,8 +1454,9 @@ async function saveBrand() {
   } catch(e) { toast('Save failed: ' + e.message, false); }
 }
 
-async function deleteBrand(id, name) {
-  if (!confirm(`Delete brand "${name}"? Existing calls and campaigns keep their history.`)) return;
+async function deleteBrand(id) {
+  const name = brandsCache[id] || 'this brand';
+  if (!confirm(`Delete "${name}"? Existing calls and campaigns keep their history.`)) return;
   try { await api('/brands/' + id, { method: 'DELETE' }); toast('Brand deleted'); loadBrands(); }
   catch(e) { toast(e.message, false); }
 }
