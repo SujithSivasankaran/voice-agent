@@ -85,7 +85,8 @@ class AppointmentTools(llm.ToolContext):
         query: campaign name, offer, or keywords mentioned by the caller
         """
         try:
-            campaigns = await get_active_campaigns()
+            # Scope to this call's brand so one brand never surfaces another's campaigns.
+            campaigns = await get_active_campaigns(self._brand_id)
             if not campaigns:
                 return "No active campaigns were found. Offer to record a callback request."
 

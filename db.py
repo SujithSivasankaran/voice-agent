@@ -39,7 +39,6 @@ SENSITIVE_KEYS = {
 KNOWN_SETTINGS_KEYS = [
     "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET",
     "GOOGLE_API_KEY", "GEMINI_MODEL", "GEMINI_TTS_VOICE", "USE_GEMINI_REALTIME",
-    "USE_LEGACY_DEFAULT_PROMPT",
     "VOBIZ_SIP_DOMAIN", "VOBIZ_USERNAME", "VOBIZ_PASSWORD",
     "VOBIZ_AUTH_ID", "VOBIZ_AUTH_TOKEN",
     "VOBIZ_OUTBOUND_NUMBER", "OUTBOUND_TRUNK_ID", "DEFAULT_TRANSFER_NUMBER",
@@ -141,48 +140,6 @@ async def save_settings(data: dict) -> None:
     if rows:
         await db.table("settings").upsert(rows, on_conflict="key").execute()
 
-
-async def _setting_value(key: str) -> Optional[str]:
-    """Read a single settings value straight from Supabase (unlike get_setting,
-    which reads env vars only)."""
-    db = await _adb()
-    try:
-        r = await db.table("settings").select("value").eq("key", key).maybe_single().execute()
-        if r and r.data and r.data.get("value"):
-            return r.data["value"]
-    except Exception:
-        pass
-    return None
-
-
-async def get_default_prompt() -> Optional[str]:
-    """The default base script (Supabase-backed). None → use the hardcoded
-    DEFAULT_SYSTEM_PROMPT in prompts.py."""
-    return await _setting_value("DEFAULT_PROMPT")
-
-
-async def save_default_prompt(text: str) -> None:
-    await set_setting("DEFAULT_PROMPT", text)
-
-
-async def get_default_feedback() -> list:
-    import json
-    raw = await _setting_value("DEFAULT_PROMPT_FEEDBACK")
-    if not raw:
-        return []
-    try:
-        items = json.loads(raw)
-        return items if isinstance(items, list) else []
-    except Exception:
-        return []
-
-
-async def append_default_feedback(text: str) -> list:
-    import json
-    items = await get_default_feedback()
-    items.append({"text": text, "at": _now_iso()})
-    await set_setting("DEFAULT_PROMPT_FEEDBACK", json.dumps(items))
-    return items
 
 
 async def get_enabled_tools() -> list:
@@ -406,11 +363,13 @@ async def insert_trial(
     return booking_id
 
 
-async def get_all_trials(date_filter: Optional[str] = None) -> list:
+async def get_all_trials(date_filter: Optional[str] = None, brand_id: Optional[str] = None) -> list:
     db = await _adb()
     query = db.table("trials").select("*").order("date").order("time")
     if date_filter:
         query = query.eq("date", date_filter)
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
     result = await query.execute()
     return result.data or []
 

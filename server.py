@@ -24,8 +24,6 @@ load_dotenv(override=False)
 from db import (
     init_db, log_error,
     get_all_settings, save_settings, get_setting, set_setting,
-    get_default_prompt, save_default_prompt,
-    get_default_feedback, append_default_feedback,
     get_errors, get_logs, clear_errors,
     TrialSlotUnavailable, insert_trial, get_all_trials, cancel_trial,
     get_next_available_trial_slots,
@@ -141,35 +139,6 @@ async def _generate_campaign_assets(name: str, purpose: str, feedback_items: lis
         logger.error("Campaign prompt generation failed: %s", exc)
         await log_error("server", f"Campaign prompt generation failed: {exc}", name, "error")
     return None, None
-
-
-async def _regenerate_default_prompt() -> None:
-    """Revise the default base script from its cumulative feedback (background)."""
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key:
-        return
-    feedback = await get_default_feedback()
-    if not feedback:
-        return
-    from prompts import DEFAULT_REVISE_INSTRUCTIONS, DEFAULT_SYSTEM_PROMPT
-    current = await get_default_prompt() or DEFAULT_SYSTEM_PROMPT
-    fb = "\n".join(f"- {f.get('text','')}" for f in feedback)
-    instr = DEFAULT_REVISE_INSTRUCTIONS.format(current=current, feedback=fb)
-    try:
-        import google.genai as genai
-        client = genai.Client(api_key=api_key)
-        model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None, lambda: client.models.generate_content(model=model, contents=instr)
-        )
-        text = (resp.text or "").strip()
-        if text:
-            await save_default_prompt(text)
-            logger.info("Default prompt revised from feedback")
-    except Exception as exc:
-        logger.error("Default prompt revision failed: %s", exc)
-        await log_error("server", f"Default prompt revision failed: {exc}", "default", "error")
 
 
 async def _regenerate_campaign(campaign_id: str, pending_status: str = "generating") -> None:
@@ -514,29 +483,53 @@ async def call_batch(
 # ── Appointments ──────────────────────────────────────────────────────────────
 
 @app.get("/appointments")
-async def list_appointments(date: Optional[str] = Query(None)):
-    return await get_all_trials(date_filter=date)
+async def list_appointments(
+    date: Optional[str] = Query(None), brand_id: Optional[str] = Query(None),
+):
+    return await get_all_trials(date_filter=date, brand_id=brand_id)
+
+
+def _parse_booking_config(brand: Optional[dict]) -> Optional[dict]:
+    """Parse a brand's booking_config JSON into a dict (None if no brand)."""
+    if not brand:
+        return None
+    raw = brand.get("booking_config")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return {}
 
 
 @app.post("/appointments")
 async def create_appointment(request: Request):
     body = await request.json()
-    required = ["name", "phone", "date", "time", "location"]
-    for f in required:
+    # location is optional now — a brand may have no locations (or a single one).
+    for f in ("name", "phone", "date", "time"):
         if not body.get(f):
             raise HTTPException(400, f"{f} is required")
+    # Resolve the brand so booking validates against ITS locations/slot-times.
+    brand_id = (body.get("brand_id") or "").strip()
+    brand = await get_brand(brand_id) if brand_id else await get_default_brand()
+    resolved_brand_id = brand["id"] if brand else None
+    config = _parse_booking_config(brand)
+    location = body.get("location", "")
     try:
         booking_id = await insert_trial(
-            body["name"], body["phone"], body["date"], body["time"], body["location"]
+            body["name"], body["phone"], body["date"], body["time"], location,
+            resolved_brand_id, config,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except TrialSlotUnavailable as exc:
         alternatives = await get_next_available_trial_slots(
-            body["date"], body["time"], body["location"]
+            body["date"], body["time"], location, brand_id=resolved_brand_id, config=config,
         )
         raise HTTPException(409, {
-            "message": "Trial slot is already booked",
+            "message": "That slot is already booked",
             "alternatives": alternatives,
         }) from exc
     return {"booking_id": booking_id, "status": "booked"}
@@ -976,34 +969,6 @@ async def post_settings(request: Request):
         raise HTTPException(400, "Expected a JSON object")
     await save_settings(body)
     return {"status": "saved", "keys_updated": list(body.keys())}
-
-
-@app.get("/default-prompt")
-async def get_default_prompt_ep():
-    """The default base script (read-only in the UI) + how much feedback it carries."""
-    from prompts import DEFAULT_SYSTEM_PROMPT
-    saved = await get_default_prompt()
-    feedback = await get_default_feedback()
-    return {"value": saved or DEFAULT_SYSTEM_PROMPT, "custom": bool(saved), "feedback_count": len(feedback)}
-
-
-@app.post("/default-prompt/feedback")
-async def default_prompt_feedback(request: Request):
-    body = await request.json()
-    text = (body.get("feedback") or "").strip()
-    if not text:
-        raise HTTPException(400, "feedback is required")
-    await append_default_feedback(text)
-    asyncio.create_task(_regenerate_default_prompt())
-    return {"status": "feedback_received", "regenerating": True}
-
-
-@app.post("/default-prompt/reset")
-async def reset_default_prompt_ep():
-    """Clear the custom default + its feedback → fall back to the built-in script."""
-    await save_default_prompt("")
-    await set_setting("DEFAULT_PROMPT_FEEDBACK", "[]")
-    return {"status": "reset"}
 
 
 @app.get("/settings/{key}")

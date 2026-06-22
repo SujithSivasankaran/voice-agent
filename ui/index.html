@@ -391,27 +391,8 @@
 <!-- CAMPAIGNS -->
 <div class="page" id="page-campaigns">
   <h1>Campaigns</h1>
-  <p class="subtitle">Campaign cards show the information available to the agent, making missing details easy to spot.</p>
+  <p class="subtitle">Each campaign belongs to a brand and uses that brand's voice, facts, and booking setup. Manage the per-brand default script under Brands.</p>
 
-  <!-- Always-on default base script (feedback-driven, not directly editable) -->
-  <div class="section-title">Default Script</div>
-  <div class="card">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-      <div>
-        <div style="font-weight:600;font-size:15px">⭐ Default (always-on base)</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Used for any outbound call without a specific campaign, and as the foundation everywhere. You don't edit it directly — give feedback and the AI refines it.</div>
-      </div>
-      <span id="default-status" style="font-size:11px;color:var(--muted)"></span>
-    </div>
-    <textarea id="default-prompt" rows="9" readonly style="background:var(--bg);color:var(--muted);cursor:default" placeholder="Loading…"></textarea>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <input id="default-feedback" placeholder="Feedback to improve the default script… e.g. 'introduce yourself faster', 'sound less formal'" style="flex:1" />
-      <button class="btn btn-primary btn-sm" onclick="submitDefaultFeedback()">💬 Apply Feedback</button>
-      <button class="btn btn-outline btn-sm" onclick="resetDefaultPrompt()">↩ Reset</button>
-    </div>
-  </div>
-
-  <div class="section-title">Campaigns</div>
   <div style="margin-bottom:16px">
     <button class="btn btn-primary" onclick="openNewCampaignModal()">+ New Campaign</button>
   </div>
@@ -420,17 +401,18 @@
 
 <!-- APPOINTMENTS -->
 <div class="page" id="page-appointments">
-  <h1>Trial Bookings</h1>
-  <p class="subtitle">One-hour trials at ADAYAR and ECR</p>
+  <h1>Bookings</h1>
+  <p class="subtitle">Appointments booked across your brands</p>
   <div class="search-bar">
+    <select id="appt-brand-filter" onchange="loadAppointments()"><option value="">All brands</option></select>
     <input id="appt-date-filter" type="date" style="width:180px" onchange="loadAppointments()" />
     <button class="btn btn-outline btn-sm" onclick="document.getElementById('appt-date-filter').value=''; loadAppointments()">Clear</button>
-    <button class="btn btn-primary btn-sm" onclick="openAddApptModal()">+ Add Trial</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddApptModal()">+ Add Booking</button>
   </div>
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Time (IST)</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time (IST)</th><th>Brand</th><th>Location</th><th>Name</th><th>Phone</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
         <tbody id="appt-body"></tbody>
       </table>
     </div>
@@ -569,26 +551,24 @@
 <!-- Add Appointment Modal -->
 <div class="modal-overlay" id="modal-appt">
   <div class="modal">
-    <h2>Add Trial Booking</h2>
+    <h2>Add Booking</h2>
     <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1"><label>Brand *</label>
+        <select id="appt-brand" onchange="onApptBrandChange()"></select>
+      </div>
       <div class="form-group"><label>Name *</label><input id="appt-name" /></div>
       <div class="form-group"><label>Phone *</label><input id="appt-phone" placeholder="+919876543210" /></div>
       <div class="form-group"><label>Date *</label><input id="appt-date" type="date" /></div>
-      <div class="form-group"><label>Location *</label>
-        <select id="appt-location"><option value="ADAYAR">ADAYAR</option><option value="ECR">ECR</option></select>
+      <div class="form-group" id="appt-location-group"><label>Location *</label>
+        <select id="appt-location"></select>
       </div>
-      <div class="form-group"><label>One-hour Start Time *</label>
-        <select id="appt-time">
-          <option value="06:00">06:00</option><option value="07:00">07:00</option>
-          <option value="08:00">08:00</option><option value="09:00">09:00</option>
-          <option value="16:30">16:30</option><option value="17:30">17:30</option>
-          <option value="18:30">18:30</option><option value="19:30">19:30</option>
-        </select>
+      <div class="form-group"><label>Start Time *</label>
+        <select id="appt-time"></select>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-appt')">Cancel</button>
-      <button class="btn btn-primary" onclick="createAppt()">Book Trial</button>
+      <button class="btn btn-primary" onclick="createAppt()">Book</button>
     </div>
   </div>
 </div>
@@ -806,8 +786,8 @@ function onPageLoad(page) {
     loadBrandsIntoSelect('sc-brand');
     loadBrandsIntoSelect('bk-brand');
   }
-  if (page === 'campaigns')      { loadCampaigns(); loadDefaultPrompt(); }
-  if (page === 'appointments')   { loadAppointments(); }
+  if (page === 'campaigns')      { loadCampaigns(); }
+  if (page === 'appointments')   { populateBrandFilter('appt-brand-filter'); loadAppointments(); }
   if (page === 'call-logs')      { loadBrandFilter(); loadCalls(1); }
   if (page === 'crm')            { loadCRM(); }
   if (page === 'brands')         { loadBrands(); }
@@ -1010,8 +990,14 @@ async function loadCampaignsIntoSelect(selectId) {
 }
 
 // ── Brands ──────────────────────────────────────────────────────────────────
-let brandsCache = {};   // id → name, used by the Call Logs brand column
+let brandsCache = {};   // id → name, used by the Call Logs / Appointments brand columns
+let brandsFull = {};    // id → full brand object, used by brand-driven form fields
 let brandDefaults = null;   // built-in / generic fallback content for the editor
+const DEFAULT_APPT_TIMES = ['06:00','07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
+
+function _cacheBrands(brands) {
+  brands.forEach(b => { brandsCache[b.id] = b.name; brandsFull[b.id] = b; });
+}
 
 async function ensureBrandDefaults() {
   if (brandDefaults) return brandDefaults;
@@ -1022,10 +1008,22 @@ async function ensureBrandDefaults() {
 
 async function ensureBrands() {
   if (Object.keys(brandsCache).length) return;
-  try {
-    const brands = await api('/brands');
-    brands.forEach(b => { brandsCache[b.id] = b.name; });
-  } catch(e) {}
+  try { _cacheBrands(await api('/brands')); } catch(e) {}
+}
+
+function parseBrandBooking(brand) {
+  if (!brand) return {};
+  try { return JSON.parse(brand.booking_config || '{}') || {}; } catch { return {}; }
+}
+
+async function populateBrandFilter(selectId) {
+  await ensureBrands();
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All brands</option>' +
+    Object.values(brandsFull).map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  sel.value = cur;
 }
 
 async function loadBrandsIntoSelect(selectId) {
@@ -1048,8 +1046,8 @@ async function loadBrandsIntoSelect(selectId) {
 async function loadBrands() {
   try {
     const brands = await api('/brands');
-    brandsCache = {};
-    brands.forEach(b => { brandsCache[b.id] = b.name; });
+    brandsCache = {}; brandsFull = {};
+    _cacheBrands(brands);
     const tbody = document.getElementById('brands-body');
     tbody.innerHTML = brands.map(b => {
       let nums = [];
@@ -1152,17 +1150,7 @@ async function setBrandDefault(id) {
 }
 
 async function loadBrandFilter() {
-  const sel = document.getElementById('calls-brand-filter');
-  if (!sel) return;
-  try {
-    const brands = await api('/brands');
-    brandsCache = {};
-    brands.forEach(b => { brandsCache[b.id] = b.name; });
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">All brands</option>' +
-      brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
-    sel.value = cur;
-  } catch(e) {}
+  await populateBrandFilter('calls-brand-filter');
 }
 
 function openNewCampaignModal() {
@@ -1204,6 +1192,7 @@ async function submitCampaignFeedback(id) {
 
 async function loadCampaigns() {
   try {
+    await ensureBrands();
     const camps = await api('/campaigns');
     const el = document.getElementById('campaigns-list');
     if (!camps.length) {
@@ -1234,6 +1223,7 @@ async function loadCampaigns() {
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
           <div style="flex:1;min-width:220px">
             <div style="font-weight:600;font-size:15px;margin-bottom:4px">${c.name} &nbsp; ${status}</div>
+            <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:6px">🏷️ ${esc(brandsCache[c.brand_id] || 'No brand')}</div>
             ${summary}
             <div style="color:var(--muted);font-size:12px;line-height:1.8;margin-top:6px">
               ${schedule}
@@ -1275,36 +1265,75 @@ async function deleteCampaign(id) {
 
 // ── Appointments ──────────────────────────────────────────────────────────────
 async function loadAppointments() {
+  await ensureBrands();
   const date = document.getElementById('appt-date-filter').value;
+  const brand = (document.getElementById('appt-brand-filter') || {}).value || '';
+  const q = [];
+  if (date)  q.push('date=' + encodeURIComponent(date));
+  if (brand) q.push('brand_id=' + encodeURIComponent(brand));
   try {
-    const appts = await api('/appointments' + (date ? '?date=' + date : ''));
+    const appts = await api('/appointments' + (q.length ? '?' + q.join('&') : ''));
     const tbody = document.getElementById('appt-body');
     tbody.innerHTML = appts.map(a => `
       <tr>
-        <td>${a.date}</td><td>${a.time}</td><td>${a.location}</td><td>${a.name}</td><td>${a.phone}</td>
+        <td>${a.date}</td><td>${a.time}</td>
+        <td style="font-size:12px;color:var(--muted)">${esc(brandsCache[a.brand_id] || '—')}</td>
+        <td>${esc(a.location || '—')}</td><td>${esc(a.name)}</td><td>${esc(a.phone)}</td>
         <td>${a.duration_minutes} min</td>
         <td><span class="badge badge-${a.status}">${a.status}</span></td>
         <td>${a.status==='booked' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppt('${a.id}')">Cancel</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="empty-state">No trial bookings</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="9" class="empty-state">No bookings</td></tr>';
   } catch(e) { toast(e.message, false); }
 }
 
-function openAddApptModal() { openModal('modal-appt'); }
+async function openAddApptModal() {
+  await ensureBrands();
+  document.getElementById('appt-name').value = '';
+  document.getElementById('appt-phone').value = '';
+  document.getElementById('appt-date').value = '';
+  const sel = document.getElementById('appt-brand');
+  const brands = Object.values(brandsFull);
+  sel.innerHTML = brands.length
+    ? brands.map(b => `<option value="${b.id}"${b.is_default ? ' selected' : ''}>${esc(b.name)}</option>`).join('')
+    : '<option value="">No brands — create one first</option>';
+  onApptBrandChange();
+  openModal('modal-appt');
+}
+
+// Populate the location + time fields from the selected brand's booking config.
+function onApptBrandChange() {
+  const cfg = parseBrandBooking(brandsFull[document.getElementById('appt-brand').value]);
+  const locs = (cfg.locations || []).map(x => String(x).toUpperCase()).filter(Boolean);
+  const times = (cfg.slot_times && cfg.slot_times.length) ? cfg.slot_times : DEFAULT_APPT_TIMES;
+  const locGroup = document.getElementById('appt-location-group');
+  const locSel = document.getElementById('appt-location');
+  if (locs.length) {
+    locGroup.style.display = '';
+    locSel.innerHTML = locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  } else {
+    locGroup.style.display = 'none';   // no locations → don't ask for one
+    locSel.innerHTML = '';
+  }
+  document.getElementById('appt-time').innerHTML =
+    times.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+}
 
 async function createAppt() {
+  const usesLocation = document.getElementById('appt-location-group').style.display !== 'none';
   const body = {
+    brand_id: document.getElementById('appt-brand').value,
     name: document.getElementById('appt-name').value.trim(),
     phone: document.getElementById('appt-phone').value.trim(),
     date: document.getElementById('appt-date').value,
     time: document.getElementById('appt-time').value,
-    location: document.getElementById('appt-location').value,
+    location: usesLocation ? document.getElementById('appt-location').value : '',
   };
-  if (!body.name || !body.phone || !body.date || !body.time || !body.location) {
-    toast('All fields are required', false); return;
+  if (!body.name || !body.phone || !body.date || !body.time) {
+    toast('Name, phone, date and time are required', false); return;
   }
   try {
     const r = await api('/appointments', {method:'POST', body:JSON.stringify(body)});
-    toast('Trial booked — ID: ' + r.booking_id);
+    toast('Booked — ID: ' + r.booking_id);
     closeModal('modal-appt');
     loadAppointments();
   } catch(e) { toast(e.message, false); }
@@ -1557,40 +1586,6 @@ async function deleteProfile(id) {
   if (!confirm('Delete this profile?')) return;
   try { await api(`/agent-profiles/${id}`, {method:'DELETE'}); toast('Deleted'); loadProfiles(); }
   catch(e) { toast(e.message, false); }
-}
-
-// ── Default Script (feedback-driven, read-only) ─────────────────────────────────
-async function loadDefaultPrompt() {
-  const ta = document.getElementById('default-prompt');
-  const st = document.getElementById('default-status');
-  try {
-    const d = await api('/default-prompt');
-    ta.value = d.value || '';
-    if (st) st.textContent = d.custom
-      ? `Refined from ${d.feedback_count} feedback note${d.feedback_count===1?'':'s'}`
-      : 'Using built-in default';
-  } catch(e) { if (st) st.textContent = 'Could not load'; }
-}
-
-async function submitDefaultFeedback() {
-  const el = document.getElementById('default-feedback');
-  const text = (el && el.value.trim()) || '';
-  if (!text) { toast('Type some feedback first', false); return; }
-  try {
-    await api('/default-prompt/feedback', { method:'POST', body: JSON.stringify({ feedback: text }) });
-    toast('Feedback saved — refining the default script…');
-    if (el) el.value = '';
-    setTimeout(loadDefaultPrompt, 4000);  // give the background rewrite a moment
-  } catch(e) { toast(e.message, false); }
-}
-
-async function resetDefaultPrompt() {
-  if (!confirm('Reset to the built-in default script? This clears all feedback applied to it.')) return;
-  try {
-    await api('/default-prompt/reset', { method:'POST' });
-    toast('Reset to built-in default');
-    loadDefaultPrompt();
-  } catch(e) { toast(e.message, false); }
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

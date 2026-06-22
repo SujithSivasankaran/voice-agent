@@ -490,25 +490,6 @@ Return ONLY valid JSON, no markdown, with exactly these keys:
 """
 
 
-# Instruction template to revise the DEFAULT base script from cumulative feedback.
-DEFAULT_REVISE_INSTRUCTIONS = """You are refining the DEFAULT outbound call script for a voice AI agent named Tina.
-
-── Current script ──
-{current}
-
-── Feedback to apply (oldest first; honour the latest) ──
-{feedback}
-
-Rewrite the script to incorporate the feedback while keeping it a COMPLETE, usable call script:
-- Tina is warm, calm, speaks at a relaxed slightly-slower pace, short turns.
-- Keep identity confirmation, the core flow, and tool usage: check_availability, book_appointment,
-  send_sms_confirmation, transfer_to_human, remember_details, and ALWAYS end_call with a warm sign-off.
-- Preserve anything the feedback didn't ask to change.
-
-Return ONLY the full revised call script as plain text — no JSON, no markdown fences, no commentary.
-"""
-
-
 # Brand-neutral campaign flow. The brand's facts, booking rules, and identity are
 # attached downstream by build_prompt(), so this core must not hardcode any one
 # brand's locations, pricing, or name — otherwise they would leak across brands.
