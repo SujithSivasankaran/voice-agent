@@ -7,6 +7,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -16,13 +17,28 @@ logger = logging.getLogger("outbound-recordings")
 _sync_lock = asyncio.Lock()
 
 
+def _normalize_s3_endpoint(value: str) -> str:
+    """Use Supabase's direct Storage hostname when given the API hostname."""
+    endpoint = value.strip().rstrip("/")
+    if not endpoint:
+        return endpoint
+    parsed = urlsplit(endpoint)
+    host = parsed.hostname or ""
+    if host.endswith(".supabase.co") and not host.endswith(".storage.supabase.co"):
+        direct_host = host.removesuffix(".supabase.co") + ".storage.supabase.co"
+        if parsed.port:
+            direct_host += f":{parsed.port}"
+        endpoint = urlunsplit((parsed.scheme, direct_host, parsed.path, "", ""))
+    return endpoint
+
+
 def _config() -> dict[str, str]:
     return {
         "auth_id": os.environ.get("VOBIZ_AUTH_ID", "").strip(),
         "auth_token": os.environ.get("VOBIZ_AUTH_TOKEN", "").strip(),
         "access_key": os.environ.get("S3_ACCESS_KEY_ID", "").strip(),
         "secret_key": os.environ.get("S3_SECRET_ACCESS_KEY", "").strip(),
-        "endpoint": os.environ.get("S3_ENDPOINT_URL", "").strip(),
+        "endpoint": _normalize_s3_endpoint(os.environ.get("S3_ENDPOINT_URL", "")),
         "region": os.environ.get("S3_REGION", "").strip() or "us-east-1",
         "bucket": os.environ.get("S3_BUCKET", "").strip(),
     }
@@ -166,11 +182,12 @@ async def sync_vobiz_recordings() -> dict[str, int]:
                     response = getattr(exc, "response", {}) or {}
                     error = response.get("Error", {}) if isinstance(response, dict) else {}
                     logger.error(
-                        "S3 recording upload failed (code=%s, message=%s, bucket=%s, endpoint=%s)",
+                        "S3 recording upload failed (code=%s, message=%s, bucket=%s, endpoint=%s, region=%s)",
                         error.get("Code") or type(exc).__name__,
                         error.get("Message") or str(exc),
                         cfg["bucket"],
                         cfg["endpoint"],
+                        cfg["region"],
                     )
                     continue
                 if await set_call_recording(call["id"], f"s3://{cfg['bucket']}/{key}"):
