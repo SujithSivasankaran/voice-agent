@@ -126,6 +126,56 @@ async def _save_early_call(
     logger.error("Early call logging exhausted all retries: %s", phone or "unknown")
 
 
+def _extract_transcript(session) -> str:
+    """Build a readable transcript from the AgentSession chat history.
+
+    This only formats text the model already produced during the call (Gemini
+    Live emits user/assistant transcriptions into the chat context), so it adds
+    no extra model or API cost. Returns "" if no usable history is found.
+    """
+    if session is None:
+        return ""
+    try:
+        history = session.history
+    except Exception:
+        return ""
+
+    items = getattr(history, "items", None)
+    if items is None and hasattr(history, "to_dict"):
+        try:
+            items = (history.to_dict() or {}).get("items", [])
+        except Exception:
+            items = []
+
+    lines: list[str] = []
+    for item in (items or []):
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content")
+        else:
+            role = getattr(item, "role", None)
+            content = getattr(item, "content", None)
+        if role not in ("user", "assistant"):
+            continue
+
+        # Normalise content to plain text. Chat items may expose text_content,
+        # a bare string, or a list mixing strings and non-text parts.
+        text = ""
+        if not isinstance(item, dict) and getattr(item, "text_content", None):
+            text = item.text_content
+        elif isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = " ".join(part for part in content if isinstance(part, str))
+        text = " ".join((text or "").split())
+        if not text:
+            continue
+
+        speaker = "Agent" if role == "assistant" else "Caller"
+        lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
 # ── Import Google plugin paths ────────────────────────────────────────────────
 
 _google_realtime = None
@@ -481,6 +531,9 @@ async def entrypoint(ctx: agents.JobContext):
         fallback_reason = f"agent session failed: {exc}"
         logger.exception("Agent session failed")
     finally:
+        # Capture the conversation transcript while the session (and its chat
+        # history) is still alive — before aclose() tears the connection down.
+        transcript = _extract_transcript(session)
         # Explicitly closing AgentSession closes the Gemini realtime connection;
         # disconnecting the room alone is not a reliable billing boundary.
         try:
@@ -488,6 +541,9 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:
             logger.warning("Agent session cleanup failed: %s", exc)
         await tools_instance.ensure_call_logged(fallback_outcome, fallback_reason)
+        # Attach the transcript to whichever call_logs row was just written
+        # (by end_call during the call, or ensure_call_logged above).
+        await tools_instance.attach_transcript(transcript)
         usage_summary = usage_collector.get_summary()
         model_name = profile_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
         estimated_cost = record_call_usage(

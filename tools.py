@@ -9,7 +9,7 @@ from livekit.agents import llm
 
 from db import (
     TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
-    insert_trial, log_call, log_error,
+    insert_trial, log_call, update_call_transcript, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
     get_active_campaigns,
@@ -36,6 +36,9 @@ class AppointmentTools(llm.ToolContext):
         self._sip_domain = os.environ.get("VOBIZ_SIP_DOMAIN", "")
         self.recording_url: Optional[str] = None
         self._call_logged = False
+        # id of the call_logs row, so the transcript can be attached after the
+        # call fully ends (the most complete history is available only then).
+        self._call_id: Optional[str] = None
         self._booking_confirmed = False
         # Set by the entrypoint after the AgentSession is built, so end_call can
         # wait for the goodbye to finish playing before hanging up.
@@ -160,7 +163,7 @@ class AppointmentTools(llm.ToolContext):
         """
         duration = int(time.time() - self._call_start_time)
         try:
-            await log_call(
+            self._call_id = await log_call(
                 phone_number=self.phone_number or "unknown",
                 lead_name=self.lead_name, outcome=outcome, reason=reason,
                 duration_seconds=duration, recording_url=self.recording_url,
@@ -218,7 +221,7 @@ class AppointmentTools(llm.ToolContext):
             outcome = "booked"
         for attempt in range(1, 4):
             try:
-                await log_call(
+                self._call_id = await log_call(
                     phone_number=self.phone_number or "unknown",
                     lead_name=self.lead_name,
                     outcome=outcome,
@@ -234,6 +237,20 @@ class AppointmentTools(llm.ToolContext):
                 if attempt < 3:
                     await asyncio.sleep(0.25 * attempt)
         logger.error("Fallback call logging exhausted all retries: %s", self.phone_number)
+
+    async def attach_transcript(self, transcript: Optional[str]) -> None:
+        """Attach the conversation transcript to the already-logged call row.
+
+        Called once the call has fully ended, since the most complete history is
+        only available then. This is pure persistence of text the model already
+        produced during the call — it makes no additional model/API calls."""
+        if not transcript or not self._call_id:
+            return
+        try:
+            await update_call_transcript(self._call_id, transcript)
+            logger.info("Transcript attached to call %s (%d chars)", self._call_id, len(transcript))
+        except Exception as exc:
+            logger.warning("Could not save transcript for call %s: %s", self._call_id, exc)
 
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:

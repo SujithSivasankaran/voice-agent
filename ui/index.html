@@ -437,7 +437,7 @@
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Recording</th></tr></thead>
+        <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
         <tbody id="calls-body"></tbody>
       </table>
     </div>
@@ -621,6 +621,18 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-contact')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Transcript -->
+<div class="modal-overlay" id="modal-transcript">
+  <div class="modal" style="width:680px">
+    <h2 id="transcript-modal-title">Transcript</h2>
+    <div id="transcript-modal-body" style="max-height:55vh;overflow-y:auto;font-size:13px;line-height:1.5;margin-top:8px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="copyTranscript()">Copy</button>
+      <button class="btn btn-outline" onclick="closeModal('modal-transcript')">Close</button>
     </div>
   </div>
 </div>
@@ -1042,10 +1054,14 @@ async function cancelAppt(id) {
 // ── Call Logs ─────────────────────────────────────────────────────────────────
 let callsPage = 1;
 
+let callsById = {};
+
 async function loadCalls(page=1) {
   callsPage = page;
   try {
     const calls = await api(`/calls?page=${page}&limit=20`);
+    callsById = {};
+    calls.forEach(c => { callsById[c.id] = c; });
     const tbody = document.getElementById('calls-body');
     tbody.innerHTML = calls.map(c => `
       <tr>
@@ -1057,12 +1073,42 @@ async function loadCalls(page=1) {
         <td>
           <input style="width:180px;font-size:12px;padding:4px 8px" value="${c.notes||''}" onblur="patchNotes('${c.id}',this.value)" placeholder="Add note…" />
         </td>
+        <td>${c.transcript ? `<button class="btn btn-outline btn-sm" onclick="viewTranscript('${c.id}')">📄 View</button>` : '—'}</td>
         <td>${c.recording_url ? `<a href="${c.recording_url}" target="_blank" style="color:var(--accent)">▶ Play</a>` : '—'}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty-state">No calls yet</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="8" class="empty-state">No calls yet</td></tr>';
     document.getElementById('calls-page-info').textContent = 'Page ' + page;
     document.getElementById('calls-prev').disabled = page <= 1;
     document.getElementById('calls-next').disabled = calls.length < 20;
   } catch(e) { toast(e.message, false); }
+}
+
+let _transcriptText = '';
+function viewTranscript(id) {
+  const c = callsById[id];
+  if (!c || !c.transcript) { toast('No transcript for this call', false); return; }
+  _transcriptText = c.transcript;
+  document.getElementById('transcript-modal-title').textContent =
+    `Transcript — ${c.lead_name || c.phone_number || ''}`;
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  document.getElementById('transcript-modal-body').innerHTML =
+    c.transcript.split('\n').map(line => {
+      const isAgent = line.startsWith('Agent:');
+      const isCaller = line.startsWith('Caller:');
+      const sep = line.indexOf(':');
+      const who = (isAgent || isCaller) && sep > -1 ? line.slice(0, sep) : '';
+      const text = who ? line.slice(sep + 1).trim() : line;
+      const color = isAgent ? 'var(--accent)' : (isCaller ? 'var(--navy)' : 'var(--muted)');
+      return `<div style="padding:5px 0;border-bottom:1px solid var(--border)">${
+        who ? `<strong style="color:${color}">${esc(who)}:</strong> ` : ''
+      }<span>${esc(text)}</span></div>`;
+    }).join('');
+  openModal('modal-transcript');
+}
+
+function copyTranscript() {
+  navigator.clipboard.writeText(_transcriptText || '')
+    .then(() => toast('Transcript copied'))
+    .catch(() => toast('Could not copy', false));
 }
 
 async function patchNotes(id, notes) {
