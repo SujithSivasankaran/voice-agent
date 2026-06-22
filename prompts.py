@@ -269,27 +269,41 @@ def _attach_caller_communication_rules(
 
 
 def _attach_trial_booking_rules(prompt: str, booking_config: dict = None) -> str:
-    """Make location and atomic availability checks mandatory in every prompt.
-    Locations and duration come from the brand's booking_config (Harry's defaults
-    when unset)."""
+    """Make atomic availability checks mandatory, and adapt the location handling
+    to how many locations the brand has:
+      - none configured → do not ask for a location at all;
+      - exactly one     → use it automatically; never ask which location;
+      - two or more     → ask which location.
+    """
     if TRIAL_BOOKING_HEADING in prompt:
         return prompt
     cfg = booking_config or {}
-    locations = [str(loc).strip().upper() for loc in (cfg.get("locations") or ["ADAYAR", "ECR"]) if str(loc).strip()]
-    loc_phrase = " or ".join(locations) if locations else "the requested location"
+    locations = [str(loc).strip().upper() for loc in (cfg.get("locations") or []) if str(loc).strip()]
     try:
         duration = int(cfg.get("duration_minutes") or 60)
     except (TypeError, ValueError):
         duration = 60
+    if not locations:
+        loc_rule = ("Do NOT ask the caller for a location. Collect and verbally confirm caller name, phone "
+                    "number, date, and start time, then call check_availability(date, time).")
+        book_call = "book_appointment(name, phone, date, time)"
+    elif len(locations) == 1:
+        only = locations[0]
+        loc_rule = (f"All bookings are at {only} — do NOT ask the caller which location. Collect and verbally "
+                    "confirm caller name, phone number, date, and start time, then call check_availability(date, time).")
+        book_call = "book_appointment(name, phone, date, time)"
+    else:
+        loc_phrase = " or ".join(locations)
+        loc_rule = (f"Ask which location ({loc_phrase}). Collect and verbally confirm caller name, phone number, "
+                    "location, date, and start time, then ALWAYS call check_availability(date, time, location).")
+        book_call = "book_appointment(name, phone, date, time, location)"
     return (
         prompt.rstrip()
         + "\n\n"
         + TRIAL_BOOKING_HEADING
-        + f"\nBefore booking, collect and verbally confirm: caller name, phone number, location ({loc_phrase}), "
-          f"date, and start time. Every trial is exactly {duration} minutes, and each location can hold only one trial "
-          "per start time. ALWAYS call check_availability(date, time, location). If unavailable, present the "
-          "returned alternatives and wait for the caller to choose; never book an alternative without confirmation. "
-          "Only then call book_appointment(name, phone, date, time, location). Never claim a booking is confirmed "
+        + f"\n{loc_rule} Every booking is {duration} minutes, and a slot can hold only one booking per start time. "
+          "If unavailable, present the returned alternatives and wait for the caller to choose; never book an "
+          f"alternative without confirmation. Only then call {book_call}. Never claim a booking is confirmed "
           "unless the tool returns 'BOOKING CONFIRMED'."
     )
 
@@ -388,10 +402,10 @@ def _brand_runtime(brand: dict) -> tuple:
     assistant_name = brand.get("assistant_name") or "Tina"
     facts = brand.get("business_context") or (DEFAULT_BUSINESS_CONTEXT if builtin else "")
     booking_config = brand.get("booking_config_parsed") or {}
-    # Attach trial-booking rules for the default brand (defaults to ADAYAR/ECR) or
-    # any brand that has defined its own locations. A neutral brand with no booking
-    # setup gets no location-specific rules.
-    attach_booking = builtin or bool(booking_config.get("locations"))
+    # Booking tools are available on every call, so always attach the booking
+    # invariant. It adapts to the brand's locations (none → don't ask; one →
+    # auto-use; many → ask), so a no-location brand never gets ADAYAR/ECR.
+    attach_booking = True
     return brand_name, assistant_name, facts, booking_config, builtin, attach_booking
 
 

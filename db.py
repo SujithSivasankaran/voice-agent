@@ -255,21 +255,33 @@ class TrialSlotUnavailable(Exception):
 
 
 def resolve_booking_config(config: Optional[dict]) -> dict:
-    """Normalise a brand's booking_config, falling back to the Harry's defaults
-    for any missing field. Returns locations (UPPER), slot_times, duration, off_days."""
-    config = config or {}
+    """Normalise a brand's booking_config.
+
+    config=None means the legacy / no-brand path → fall back to the full Harry's
+    defaults (locations, slot times, off-days). A dict (even {}) is used as-is:
+    a missing field means that dimension is unconstrained — no locations (book
+    without one), no fixed slot times (any time), and no closed days.
+    Returns locations (UPPER), slot_times, duration, off_days.
+    """
+    if config is None:
+        return {
+            "locations": TRIAL_LOCATIONS,
+            "slot_times": TRIAL_SLOT_TIMES,
+            "duration_minutes": DEFAULT_TRIAL_DURATION_MINUTES,
+            "off_days": DEFAULT_TRIAL_OFF_DAYS,
+        }
     locations = tuple(
         str(loc).strip().upper()
-        for loc in (config.get("locations") or TRIAL_LOCATIONS)
+        for loc in (config.get("locations") or [])
         if str(loc).strip()
-    ) or TRIAL_LOCATIONS
-    slot_times = tuple(config.get("slot_times") or TRIAL_SLOT_TIMES)
+    )
+    slot_times = tuple(config.get("slot_times") or [])
     try:
         duration = int(config.get("duration_minutes") or DEFAULT_TRIAL_DURATION_MINUTES)
     except (TypeError, ValueError):
         duration = DEFAULT_TRIAL_DURATION_MINUTES
     off_days_raw = config.get("off_days")
-    off_days = tuple(off_days_raw) if off_days_raw is not None else DEFAULT_TRIAL_OFF_DAYS
+    off_days = tuple(off_days_raw) if off_days_raw is not None else ()
     return {
         "locations": locations,
         "slot_times": slot_times,
@@ -279,10 +291,23 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
 
 
 def normalize_trial_location(location: str, config: Optional[dict] = None) -> str:
+    """Resolve the booking location against the brand's configured locations:
+    - no locations configured → return "" (book without a location);
+    - exactly one location    → use it, even if the caller didn't say it;
+    - two or more             → the caller's choice must match one of them.
+    """
     cfg = resolve_booking_config(config)
+    locations = cfg["locations"]
     value = (location or "").strip().upper()
-    if value not in cfg["locations"]:
-        raise ValueError("location must be " + " or ".join(cfg["locations"]))
+    if not locations:
+        return ""
+    if len(locations) == 1:
+        # Single branch — no need to ask; accept it whether or not the caller named it.
+        if value and value != locations[0]:
+            raise ValueError(f"the only location is {locations[0]}")
+        return locations[0]
+    if value not in locations:
+        raise ValueError("location must be " + " or ".join(locations))
     return value
 
 
@@ -295,13 +320,13 @@ def validate_trial_slot(
         slot = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError as exc:
         raise ValueError("date and time must use YYYY-MM-DD and HH:MM") from exc
-    if slot.weekday() in cfg["off_days"]:
-        raise ValueError("trial sessions are unavailable on that day")
-    if time not in cfg["slot_times"]:
+    if cfg["off_days"] and slot.weekday() in cfg["off_days"]:
+        raise ValueError("bookings are unavailable on that day")
+    if cfg["slot_times"] and time not in cfg["slot_times"]:
         raise ValueError("time must be one of: " + ", ".join(cfg["slot_times"]))
     now = datetime.now(IST).replace(tzinfo=None)
     if slot <= now:
-        raise ValueError("trial slot must be in the future")
+        raise ValueError("the slot must be in the future")
     return date, time, location
 
 

@@ -9,7 +9,7 @@ from livekit.agents import llm
 
 from db import (
     TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
-    insert_trial, log_call, update_call_transcript, log_error,
+    insert_trial, normalize_trial_location, log_call, update_call_transcript, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
     get_active_campaigns,
@@ -120,53 +120,64 @@ class AppointmentTools(llm.ToolContext):
             logger.warning("Campaign lookup failed: %s", exc)
             return "Campaign lookup is temporarily unavailable. Offer to record a callback request."
 
+    def _location_label(self, location: str) -> str:
+        """A ' in <LOCATION>' suffix for tool replies, or '' when this brand has no
+        locations. Resolves single-branch auto-fill so the reply names the branch."""
+        try:
+            loc = normalize_trial_location(location, self.booking_config)
+        except Exception:
+            loc = (location or "").strip().upper()
+        return f" in {loc}" if loc else ""
+
     @llm.function_tool
-    async def check_availability(self, date: str, time: str, location: str) -> str:
+    async def check_availability(self, date: str, time: str, location: str = "") -> str:
         """
-        Check a trial slot at a location before booking.
-        Call this after collecting date, time, and location.
-        location: one of the locations offered to the caller | date: YYYY-MM-DD | time: HH:MM (24-hour)
+        Check whether a slot is free before booking. Call after collecting date and time.
+        location is ONLY needed when the business has more than one location; omit it
+        otherwise (a single-location business is filled in automatically).
+        date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
+            where = self._location_label(location)
             if await check_trial_slot(date, time, location, self._brand_id, self.booking_config):
-                return f"available: {date} at {time} in {location.upper()}"
+                return f"available: {date} at {time}{where}"
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
             )
-            choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
-            return f"unavailable at {location.upper()}: suggest one of these next available times: {choices}"
+            choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
+            return f"unavailable{where}: suggest one of these next available times: {choices}"
         except ValueError as exc:
-            return f"invalid trial request: {exc}. Ask the caller to correct it."
+            return f"invalid booking request: {exc}. Ask the caller to correct it."
         except Exception as exc:
-            logger.error("Trial availability check failed: %s", exc)
-            return "Unable to check trial availability right now. Do not claim the slot is available."
+            logger.error("Availability check failed: %s", exc)
+            return "Unable to check availability right now. Do not claim the slot is available."
 
     @llm.function_tool
-    async def book_appointment(self, name: str, phone: str, date: str, time: str, location: str) -> str:
+    async def book_appointment(self, name: str, phone: str, date: str, time: str, location: str = "") -> str:
         """
-        Atomically book a trial after the caller confirms every detail.
-        location: one of the locations offered to the caller | date: YYYY-MM-DD | time: HH:MM (24-hour)
+        Atomically book the slot after the caller confirms every detail.
+        location is ONLY needed when the business has more than one location; omit it
+        otherwise (a single-location business is filled in automatically).
+        date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
             booking_id = await insert_trial(
                 name, phone, date, time, location, self._brand_id, self.booking_config,
             )
             self._booking_confirmed = True
-            return (
-                f"BOOKING CONFIRMED. ID: {booking_id}. Trial at "
-                f"{location.upper()} on {date} at {time}."
-            )
+            where = self._location_label(location)
+            return f"BOOKING CONFIRMED. ID: {booking_id}. Booked{where} on {date} at {time}."
         except TrialSlotUnavailable:
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
             )
-            choices = ", ".join(alternatives) or "no open slots found in the next 14 days"
+            choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"NOT BOOKED: that slot was just taken. Ask the caller to choose from: {choices}."
         except ValueError as exc:
             return f"NOT BOOKED: {exc}. Ask the caller to correct the booking details."
         except Exception as exc:
-            logger.error("Trial booking failed: %s", exc)
-            return "NOT BOOKED: technical issue saving the trial. Do not tell the caller it is confirmed."
+            logger.error("Booking failed: %s", exc)
+            return "NOT BOOKED: technical issue saving the booking. Do not tell the caller it is confirmed."
 
     @llm.function_tool
     async def end_call(self, outcome: str, reason: str = "") -> str:
