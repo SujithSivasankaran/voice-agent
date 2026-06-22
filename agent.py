@@ -465,9 +465,11 @@ async def entrypoint(ctx: agents.JobContext):
             phone_number = caller_num
         if getattr(caller, "name", ""):
             lead_name = caller.name
-        # Log raw SIP attributes once so we can confirm which key carries the
-        # dialed DID for this trunk, then route the call to the matching brand.
-        logger.info("Inbound SIP attributes: %s", dict(getattr(caller, "attributes", None) or {}))
+        # Log raw SIP attributes once (to Live Logs too) so we can confirm which
+        # key carries the dialed DID for this trunk, then route to the matching brand.
+        attrs = dict(getattr(caller, "attributes", None) or {})
+        logger.info("Inbound SIP attributes: %s", attrs)
+        await _log("info", f"Inbound SIP attributes: {attrs}")
         dialed = _dialed_number(caller)
         brand = await _resolve_brand(meta, dialed)
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'} → brand={brand.get('name') or 'default'} (dialed {dialed or 'unknown'})")
@@ -575,7 +577,9 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
         if is_inbound:
-            greeting = "Hi, this is Tina from Harry's Fitcamp. How can I help you?"
+            greet_assistant = brand.get("assistant_name") or "Tina"
+            greet_brand = brand.get("name") or "Harry's Fitcamp"
+            greeting = f"Hi, this is {greet_assistant} from {greet_brand}. How can I help you?"
             try:
                 await session.say(greeting, allow_interruptions=True)
             except Exception as exc:

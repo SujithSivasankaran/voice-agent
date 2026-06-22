@@ -325,15 +325,87 @@ def _fill_prompt_placeholders(
     return out
 
 
-def _brand_fields(brand: dict = None) -> tuple:
-    """Pull (name, assistant_name, facts, booking_config) from a brand dict,
-    using the built-in Harry's values for any unset field."""
-    brand = brand or {}
-    name = brand.get("name") or "Harry's Fitcamp"
-    assistant = brand.get("assistant_name") or "Tina"
-    facts = brand.get("business_context") or DEFAULT_BUSINESS_CONTEXT
-    booking = brand.get("booking_config_parsed") or {}
-    return name, assistant, facts, booking
+# Brand-neutral fallbacks for a CONFIGURED non-default brand that has left a prompt
+# field blank. These deliberately contain no Harry's-specific facts, locations, or
+# pricing — only the brand's own name/assistant — so a half-configured brand never
+# impersonates Harry's. The default brand keeps using the built-in Harry's prompts.
+GENERIC_OUTBOUND_PROMPT = """\
+You are {assistant_name} calling on behalf of {brand_name}. Be warm, calm, and never pushy;
+speak in short turns of one or two sentences.
+
+FLOW
+1. Confirm you are speaking with {lead_name}. If it is the wrong person, apologise and
+   end_call(wrong_number).
+2. Introduce yourself and ask if they have a moment.
+3. Briefly explain why you are calling, then invite them to the next step.
+4. To book, collect and verbally confirm the required details, call check_availability, and book
+   only a confirmed available slot. Claim a booking only after the tool returns BOOKING CONFIRMED.
+5. Never invent offers, prices, or details you were not given.
+6. On a clear no, a closing cue, or a completed booking, give one short sign-off, let it finish,
+   then immediately call end_call with the correct outcome.
+
+STYLE
+Match the caller's language naturally. If they say hold on or go quiet, wait silently. Never reveal
+routing, providers, phone numbers, or other internal details.
+"""
+
+GENERIC_INBOUND_PROMPT = """\
+You are {assistant_name}, the front-desk assistant for {brand_name}. This is an incoming call.
+The greeting was already spoken, so do not repeat it. Listen and help with the caller's reason.
+If they only say hello, ask: "How can I help you today?"
+
+PRINCIPLES
+- Answer the caller's actual question directly and concisely.
+- Only state facts you are sure of; never invent offers, prices, or details.
+- If you do not have the answer, offer a callback and capture it with remember_details.
+
+ESSENTIAL ACTIONS
+- For a booking request, collect and confirm the needed details, call check_availability, and book
+  only a confirmed available slot. Claim confirmation only after the tool returns BOOKING CONFIRMED.
+- For complex account or billing issues, use transfer_to_human; if transfer fails, take a message.
+
+STYLE
+Be warm and conversational; keep ordinary turns to one or two short sentences. Match the caller's
+language naturally. If they say hold on or go quiet, wait silently.
+"""
+
+
+def _use_builtin_defaults(brand: dict) -> bool:
+    """Harry's built-in prompts/facts/booking are an appropriate fallback only for
+    the default brand (or when no brand exists at all). A configured non-default
+    brand falls back to neutral generic text instead of impersonating Harry's."""
+    if not brand:
+        return True
+    return bool(brand.get("is_default"))
+
+
+def _brand_runtime(brand: dict) -> tuple:
+    """Resolve the per-call brand values, choosing Harry's built-in fallbacks only
+    for the default brand and neutral generic ones for a configured non-default brand.
+    Returns (brand_name, assistant_name, facts, booking_config, builtin, attach_booking)."""
+    builtin = _use_builtin_defaults(brand)
+    brand_name = brand.get("name") or ("Harry's Fitcamp" if builtin else "our company")
+    assistant_name = brand.get("assistant_name") or "Tina"
+    facts = brand.get("business_context") or (DEFAULT_BUSINESS_CONTEXT if builtin else "")
+    booking_config = brand.get("booking_config_parsed") or {}
+    # Attach trial-booking rules for the default brand (defaults to ADAYAR/ECR) or
+    # any brand that has defined its own locations. A neutral brand with no booking
+    # setup gets no location-specific rules.
+    attach_booking = builtin or bool(booking_config.get("locations"))
+    return brand_name, assistant_name, facts, booking_config, builtin, attach_booking
+
+
+def _finish_prompt(out, brand_name, assistant_name, facts, booking_config, attach_booking):
+    """Attach the universal invariants once each (idempotent). Business facts and
+    trial-booking rules are skipped when a neutral brand has none, so it never gets
+    Harry's facts or ADAYAR/ECR locations bolted on."""
+    out = _attach_call_controls(out)
+    if facts and facts.strip():
+        out = _attach_business_context(out, facts, brand_name)
+    out = _attach_caller_communication_rules(out, assistant_name, brand_name)
+    if attach_booking:
+        out = _attach_trial_booking_rules(out, booking_config)
+    return out
 
 
 def build_prompt(
@@ -344,20 +416,14 @@ def build_prompt(
     """Build the outbound system prompt for a brand.
 
     Base text is the call-specific custom/campaign prompt, else the brand's
-    outbound_prompt, else the compact built-in default. The brand's facts and
-    the universal call-control / communication / booking invariants are attached
-    once each (idempotently)."""
+    outbound_prompt, else a default (Harry's built-in for the default brand, a
+    neutral generic script for a configured non-default brand)."""
     brand = brand or {}
-    brand_name, assistant_name, facts, booking_config = _brand_fields(brand)
-    base = custom_prompt or brand.get("outbound_prompt") or COMPACT_OUTBOUND_SYSTEM_PROMPT
-    prompt = _fill_prompt_placeholders(base, lead_name, brand_name, assistant_name)
-    return _attach_trial_booking_rules(
-        _attach_caller_communication_rules(
-            _attach_call_controls(_attach_business_context(prompt, facts, brand_name)),
-            assistant_name, brand_name,
-        ),
-        booking_config,
-    )
+    brand_name, assistant_name, facts, booking_config, builtin, attach_booking = _brand_runtime(brand)
+    base = (custom_prompt or brand.get("outbound_prompt")
+            or (COMPACT_OUTBOUND_SYSTEM_PROMPT if builtin else GENERIC_OUTBOUND_PROMPT))
+    out = _fill_prompt_placeholders(base, lead_name, brand_name, assistant_name)
+    return _finish_prompt(out, brand_name, assistant_name, facts, booking_config, attach_booking)
 
 
 def build_inbound_prompt(
@@ -366,21 +432,16 @@ def build_inbound_prompt(
     campaign_catalog: str = "",
 ) -> str:
     """Build the inbound system prompt for a brand, with a small active-campaign
-    index. Base text is the brand's inbound_prompt, else the built-in default."""
+    index. Base text is the brand's inbound_prompt, else a default (Harry's built-in
+    for the default brand, a neutral generic script for a non-default brand)."""
     brand = brand or {}
-    brand_name, assistant_name, facts, booking_config = _brand_fields(brand)
-    base = brand.get("inbound_prompt") or INBOUND_SYSTEM_PROMPT
+    brand_name, assistant_name, facts, booking_config, builtin, attach_booking = _brand_runtime(brand)
+    base = brand.get("inbound_prompt") or (INBOUND_SYSTEM_PROMPT if builtin else GENERIC_INBOUND_PROMPT)
     out = _fill_prompt_placeholders(base, lead_name, brand_name, assistant_name)
     if campaign_catalog and campaign_catalog.strip():
         out += ("\n\nACTIVE CAMPAIGN INDEX (recognition only; retrieve details before answering)\n"
                 + campaign_catalog.strip())
-    return _attach_trial_booking_rules(
-        _attach_caller_communication_rules(
-            _attach_call_controls(_attach_business_context(out, facts, brand_name)),
-            assistant_name, brand_name,
-        ),
-        booking_config,
-    )
+    return _finish_prompt(out, brand_name, assistant_name, facts, booking_config, attach_booking)
 
 
 # ── Campaign prompt generation & assembly ───────────────────────────────────────
