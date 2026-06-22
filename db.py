@@ -474,6 +474,12 @@ async def update_call_transcript(call_id: str, transcript: str) -> bool:
     return len(result.data or []) > 0
 
 
+async def update_call_cost(call_id: str, estimated_cost: float) -> bool:
+    db = await _adb()
+    result = await db.table("call_logs").update({"estimated_cost": estimated_cost}).eq("id", call_id).execute()
+    return len(result.data or []) > 0
+
+
 async def get_all_calls(page: int = 1, limit: int = 20, brand_id: Optional[str] = None) -> list:
     db = await _adb()
     offset = (page - 1) * limit
@@ -542,18 +548,46 @@ async def get_contacts() -> list:
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
+# Outcomes where the agent never actually connected/spoke with a person.
+NON_CONNECTED_OUTCOMES = {"no_answer", "busy", "failed", "declined", "timeout"}
+
+
+async def _fetch_call_rows_for_stats(db, brand_id: Optional[str]) -> list:
+    """Fetch the lightweight columns stats needs. Tries to include estimated_cost,
+    falling back if that column has not been migrated yet."""
+    def _q(cols: str):
+        q = db.table("call_logs").select(cols)
+        return q.eq("brand_id", brand_id) if brand_id else q
+    try:
+        return (await _q("outcome, duration_seconds, timestamp, estimated_cost").execute()).data or []
+    except Exception:
+        return (await _q("outcome, duration_seconds, timestamp").execute()).data or []
+
+
 async def get_stats(brand_id: Optional[str] = None) -> dict:
     db = await _adb()
-    stats_query = db.table("call_logs").select("outcome, duration_seconds, timestamp")
-    if brand_id:
-        stats_query = stats_query.eq("brand_id", brand_id)
-    rows = (await stats_query.execute()).data or []
+    rows = await _fetch_call_rows_for_stats(db, brand_id)
+    today_iso = datetime.now(IST).date().isoformat()
+
     total_calls    = len(rows)
     booked         = sum(1 for r in rows if r.get("outcome") == "booked")
     not_interested = sum(1 for r in rows if r.get("outcome") == "not_interested")
     durations      = [r["duration_seconds"] for r in rows if r.get("duration_seconds")]
     avg_dur        = sum(durations) / len(durations) if durations else 0
     booking_rate   = round((booked / total_calls * 100) if total_calls else 0, 1)
+
+    # Funnel: dialed → connected (answered) → booked.
+    connected      = sum(1 for r in rows if (r.get("outcome") or "") not in NON_CONNECTED_OUTCOMES)
+    answer_rate    = round((connected / total_calls * 100) if total_calls else 0, 1)
+    callbacks_pending = sum(1 for r in rows if r.get("outcome") == "callback_requested")
+    calls_today    = sum(1 for r in rows if (r.get("timestamp") or "")[:10] == today_iso)
+    booked_today   = sum(1 for r in rows if r.get("outcome") == "booked" and (r.get("timestamp") or "")[:10] == today_iso)
+
+    # Spend (USD), from the per-call estimated cost.
+    total_cost       = sum(float(r.get("estimated_cost") or 0) for r in rows)
+    cost_per_call    = (total_cost / total_calls) if total_calls else 0
+    cost_per_booking = (total_cost / booked) if booked else 0
+
     outcomes: dict = {}
     for r in rows:
         o = r.get("outcome") or "unknown"
@@ -578,11 +612,65 @@ async def get_stats(brand_id: Optional[str] = None) -> dict:
             dur_sum[o] += sec
             dur_cnt[o] += 1
     duration_by_outcome = {o: dur_sum[o] / dur_cnt[o] for o in dur_sum}
+
+    # Trials: actual bookings, upcoming, and cancellations.
+    trials_total = trials_upcoming = trials_cancelled = 0
+    try:
+        def _tq(cols: str):
+            q = db.table("trials").select(cols)
+            return q.eq("brand_id", brand_id) if brand_id else q
+        trials = (await _tq("status, date").execute()).data or []
+        trials_total = len(trials)
+        trials_cancelled = sum(1 for t in trials if t.get("status") == "cancelled")
+        trials_upcoming = sum(
+            1 for t in trials if t.get("status") == "booked" and (t.get("date") or "") >= today_iso
+        )
+    except Exception:
+        pass
+    trial_cancel_rate = round((trials_cancelled / trials_total * 100) if trials_total else 0, 1)
+
     return {
         "total_calls": total_calls, "booked": booked, "not_interested": not_interested,
         "avg_duration_seconds": round(avg_dur, 1), "booking_rate_percent": booking_rate,
         "outcomes": outcomes, "timeline": timeline, "duration_by_outcome": duration_by_outcome,
+        "connected": connected, "answer_rate_percent": answer_rate,
+        "callbacks_pending": callbacks_pending,
+        "calls_today": calls_today, "booked_today": booked_today,
+        "total_cost": round(total_cost, 4), "cost_per_call": round(cost_per_call, 4),
+        "cost_per_booking": round(cost_per_booking, 4),
+        "trials_upcoming": trials_upcoming, "trials_cancelled": trials_cancelled,
+        "trials_total": trials_total, "trial_cancel_rate_percent": trial_cancel_rate,
     }
+
+
+async def get_brand_breakdown() -> list:
+    """Per-brand performance for the dashboard comparison table."""
+    db = await _adb()
+    try:
+        rows = (await db.table("call_logs").select("outcome, brand_id, estimated_cost").execute()).data or []
+    except Exception:
+        rows = (await db.table("call_logs").select("outcome, brand_id").execute()).data or []
+    name_by_id = {b["id"]: b.get("name") for b in await get_all_brands()}
+    agg: dict = {}
+    for r in rows:
+        bid = r.get("brand_id") or ""
+        a = agg.setdefault(bid, {"calls": 0, "booked": 0, "cost": 0.0})
+        a["calls"] += 1
+        if r.get("outcome") == "booked":
+            a["booked"] += 1
+        a["cost"] += float(r.get("estimated_cost") or 0)
+    out = []
+    for bid, a in agg.items():
+        out.append({
+            "brand_id": bid,
+            "name": name_by_id.get(bid) or ("Unassigned" if not bid else "Unknown brand"),
+            "total_calls": a["calls"],
+            "booked": a["booked"],
+            "booking_rate_percent": round((a["booked"] / a["calls"] * 100) if a["calls"] else 0, 1),
+            "total_cost": round(a["cost"], 4),
+        })
+    out.sort(key=lambda x: x["total_calls"], reverse=True)
+    return out
 
 
 # ── Campaigns ─────────────────────────────────────────────────────────────────

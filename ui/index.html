@@ -271,6 +271,7 @@
       <p class="subtitle">Real-time overview of your AI calling performance</p>
     </div>
     <div class="topbar-actions">
+      <select id="dash-brand-filter" onchange="loadDashboard()"><option value="">All brands</option></select>
       <button class="btn btn-outline btn-sm" onclick="exportRecentCalls()">⬇ Export</button>
       <button class="btn btn-primary btn-sm" onclick="loadDashboard()">↻ Refresh</button>
     </div>
@@ -282,6 +283,11 @@
       <div class="kpi-head"><span class="kpi-label">Total Calls</span><span class="kpi-icon">📞</span></div>
       <div class="kpi-value" id="st-total">—</div>
       <div class="kpi-sub" id="st-total-sub">all time</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Answer Rate</span><span class="kpi-icon">📶</span></div>
+      <div class="kpi-value" id="st-answer">—</div>
+      <div class="kpi-sub" id="st-answer-sub">connected</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-head"><span class="kpi-label">Booked</span><span class="kpi-icon">✅</span></div>
@@ -298,6 +304,21 @@
       <div class="kpi-value" id="st-dur">—</div>
       <div class="kpi-sub">per call</div>
     </div>
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Total Spend</span><span class="kpi-icon">💰</span></div>
+      <div class="kpi-value" id="st-spend">—</div>
+      <div class="kpi-sub" id="st-spend-sub">est. USD</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Cost / Booking</span><span class="kpi-icon">🧾</span></div>
+      <div class="kpi-value" id="st-cpb">—</div>
+      <div class="kpi-sub">est. USD</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Callbacks</span><span class="kpi-icon">↩️</span></div>
+      <div class="kpi-value" id="st-callbacks">—</div>
+      <div class="kpi-sub">to follow up</div>
+    </div>
   </div>
 
   <!-- Charts -->
@@ -313,6 +334,32 @@
         <canvas id="chart-outcomes"></canvas>
         <div class="donut-center"><span class="pct" id="donut-pct">—</span></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Trials snapshot -->
+  <div class="section-title">Trials</div>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Upcoming Trials</span><span class="kpi-icon">📅</span></div>
+      <div class="kpi-value" id="st-trials-upcoming">—</div>
+      <div class="kpi-sub">booked, not yet passed</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-head"><span class="kpi-label">Cancellation Rate</span><span class="kpi-icon">🚫</span></div>
+      <div class="kpi-value" id="st-trials-cancel">—</div>
+      <div class="kpi-sub" id="st-trials-cancel-sub">of all trials</div>
+    </div>
+  </div>
+
+  <!-- By brand -->
+  <div class="section-title">By Brand</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Brand</th><th>Calls</th><th>Booked</th><th>Booking Rate</th><th>Spend (est. USD)</th></tr></thead>
+        <tbody id="brand-breakdown-body"></tbody>
+      </table>
     </div>
   </div>
 
@@ -787,7 +834,7 @@ document.querySelectorAll('nav a[data-page]').forEach(a => {
 });
 
 function onPageLoad(page) {
-  if (page === 'dashboard')      { loadDashboard(); }
+  if (page === 'dashboard')      { populateBrandFilter('dash-brand-filter'); loadDashboard(); }
   if (page === 'new-call')       {
     loadCampaignsIntoSelect('sc-campaign');
     loadCampaignsIntoSelect('bk-campaign');
@@ -877,25 +924,57 @@ function initCharts(timeline, outcomes) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
+function fmtMoney(n, dp=2) { return '$' + (Number(n) || 0).toFixed(dp); }
+function dashBrand() { return (document.getElementById('dash-brand-filter') || {}).value || ''; }
+
 async function loadDashboard() {
   try {
-    const s = await api('/stats');
+    await ensureBrands();
+    const brand = dashBrand();
+    const qs = brand ? '?brand_id=' + encodeURIComponent(brand) : '';
+    const s = await api('/stats' + qs);
     const total = s.total_calls || 0;
-    const share = n => total ? Math.round((n / total) * 100) : 0;
     document.getElementById('st-total').textContent = fmtCompact(total);
+    document.getElementById('st-total-sub').textContent = (s.calls_today || 0) + ' today';
+    document.getElementById('st-answer').textContent = (s.answer_rate_percent || 0) + '%';
+    document.getElementById('st-answer-sub').textContent = `${fmtCompact(s.connected || 0)} of ${fmtCompact(total)} connected`;
     document.getElementById('st-booked').textContent = fmtCompact(s.booked || 0);
-    document.getElementById('st-booked-sub').textContent = share(s.booked || 0) + '% of calls';
+    document.getElementById('st-booked-sub').textContent = (s.booked_today || 0) + ' today';
     document.getElementById('st-rate').textContent = (s.booking_rate_percent || 0) + '%';
     document.getElementById('st-dur').textContent = fmtDur(s.avg_duration_seconds);
+    document.getElementById('st-spend').textContent = fmtMoney(s.total_cost, 2);
+    document.getElementById('st-spend-sub').textContent = fmtMoney(s.cost_per_call, 4) + ' / call';
+    document.getElementById('st-cpb').textContent = s.booked ? fmtMoney(s.cost_per_booking, 2) : '—';
+    document.getElementById('st-callbacks').textContent = fmtCompact(s.callbacks_pending || 0);
+    document.getElementById('st-trials-upcoming').textContent = fmtCompact(s.trials_upcoming || 0);
+    document.getElementById('st-trials-cancel').textContent = (s.trial_cancel_rate_percent || 0) + '%';
+    document.getElementById('st-trials-cancel-sub').textContent = `${s.trials_cancelled || 0} of ${s.trials_total || 0} trials`;
     document.getElementById('donut-pct').textContent = (s.booking_rate_percent || 0) + '%';
     initCharts(s.timeline || [], s.outcomes || {});
+    loadBrandBreakdown();
     loadRecentCalls();
   } catch(e) { toast('Stats error: ' + e.message, false); }
 }
 
+async function loadBrandBreakdown() {
+  try {
+    const rows = await api('/stats/brands');
+    const tbody = document.getElementById('brand-breakdown-body');
+    tbody.innerHTML = rows.map(b => `
+      <tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${fmtCompact(b.total_calls)}</td>
+        <td>${fmtCompact(b.booked)}</td>
+        <td>${b.booking_rate_percent}%</td>
+        <td>${fmtMoney(b.total_cost, 2)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="empty-state">No calls yet</td></tr>';
+  } catch(e) {}
+}
+
 async function loadRecentCalls() {
   try {
-    const calls = await api('/calls?limit=8');
+    const brand = dashBrand();
+    const calls = await api('/calls?limit=8' + (brand ? '&brand_id=' + encodeURIComponent(brand) : ''));
     const tbody = document.querySelector('#tbl-recent tbody');
     tbody.innerHTML = calls.slice(0,8).map(c => `
       <tr>

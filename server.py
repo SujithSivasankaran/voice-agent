@@ -28,7 +28,7 @@ from db import (
     TrialSlotUnavailable, insert_trial, get_all_trials, cancel_trial,
     get_next_available_trial_slots,
     get_all_calls, get_call, update_call_notes, get_contacts, get_calls_by_phone,
-    get_stats,
+    get_stats, get_brand_breakdown,
     create_campaign, get_all_campaigns, get_campaign, update_campaign_status,
     update_campaign_run_stats, delete_campaign,
     get_active_campaigns, update_campaign_generated, set_campaign_prompt_status,
@@ -652,6 +652,11 @@ async def add_memory(phone: str, request: Request):
 @app.get("/stats")
 async def stats(brand_id: Optional[str] = Query(None)):
     return await get_stats(brand_id=brand_id)
+
+
+@app.get("/stats/brands")
+async def stats_by_brand():
+    return await get_brand_breakdown()
 
 
 # ── Campaigns ─────────────────────────────────────────────────────────────────

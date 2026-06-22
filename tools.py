@@ -9,7 +9,7 @@ from livekit.agents import llm
 
 from db import (
     TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
-    insert_trial, normalize_trial_location, log_call, update_call_transcript, log_error,
+    insert_trial, normalize_trial_location, log_call, update_call_transcript, update_call_cost, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
     get_active_campaigns,
@@ -279,6 +279,16 @@ class AppointmentTools(llm.ToolContext):
             logger.info("Transcript attached to call %s (%d chars)", self._call_id, len(transcript))
         except Exception as exc:
             logger.warning("Could not save transcript for call %s: %s", self._call_id, exc)
+
+    async def attach_cost(self, estimated_cost) -> None:
+        """Store this call's estimated Gemini spend on the call_logs row, so the
+        dashboard can report total spend and cost per booking."""
+        if estimated_cost is None or not self._call_id:
+            return
+        try:
+            await update_call_cost(self._call_id, float(estimated_cost))
+        except Exception as exc:
+            logger.warning("Could not save cost for call %s: %s", self._call_id, exc)
 
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:
