@@ -274,6 +274,37 @@ except ImportError:
 
 # ── Session factory ───────────────────────────────────────────────────────────
 
+def _vertex_kwargs() -> dict:
+    """Vertex AI routing for the realtime model — cuts the trans-Pacific hop to
+    the US Developer-API endpoint by serving Gemini Live from a nearby region.
+
+    Writes the service-account key from GOOGLE_SA_JSON_B64 to a file for ADC and
+    returns the RealtimeModel kwargs. The region must actually serve the Live API:
+    asia-southeast1 (Singapore) is the closest that does — Mumbai usually doesn't.
+    Independent of the text-generation path (brand prompts), which stays on
+    GOOGLE_API_KEY because we never set the global GOOGLE_GENAI_USE_VERTEXAI.
+    """
+    import base64
+    import tempfile
+
+    b64 = os.environ.get("GOOGLE_SA_JSON_B64", "").strip()
+    if b64 and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        try:
+            path = os.path.join(tempfile.gettempdir(), "gcp-sa.json")
+            with open(path, "wb") as fh:
+                fh.write(base64.b64decode(b64))
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+            logger.info("Vertex ADC credentials written to %s", path)
+        except Exception as exc:
+            logger.warning("Could not write Vertex SA credentials: %s", exc)
+
+    kwargs = {"vertexai": True, "location": os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")}
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if project:
+        kwargs["project"] = project
+    return kwargs
+
+
 def _build_session(
     tools: list,
     system_prompt: str,
@@ -327,6 +358,26 @@ def _build_session(
             realtime_kwargs["realtime_input_config"]      = _realtime_input_cfg
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
+
+        # Optional: serve Gemini Live from Vertex AI in a nearby region instead of
+        # the US Developer-API endpoint. Only the vertex kwargs the installed
+        # RealtimeModel actually accepts are passed (version-safe); otherwise it
+        # falls back to the API-key path with a warning.
+        if os.environ.get("GEMINI_USE_VERTEX", "").lower() == "true":
+            _vx = _vertex_kwargs()
+            try:
+                import inspect
+                _params = inspect.signature(RealtimeClass).parameters
+                _has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _params.values())
+                _vx = {k: v for k, v in _vx.items() if _has_var_kw or k in _params}
+            except Exception:
+                pass
+            if _vx.get("vertexai"):
+                realtime_kwargs.update(_vx)
+                logger.info("SESSION: Gemini Live via Vertex AI (location=%s)", _vx.get("location"))
+            else:
+                logger.warning("GEMINI_USE_VERTEX set but this RealtimeModel build "
+                               "doesn't accept vertexai kwargs — using the API-key path")
 
         # Attach a TTS so session.say() can speak a fixed line (e.g. the inbound
         # greeting) — the realtime model itself ignores say(). The TTS is only
