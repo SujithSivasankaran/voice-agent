@@ -374,7 +374,12 @@ def _build_session(
                 pass
             if _vx.get("vertexai"):
                 realtime_kwargs.update(_vx)
-                logger.info("SESSION: Gemini Live via Vertex AI (location=%s)", _vx.get("location"))
+                # The Vertex Live model id differs from the Developer-API name AND from
+                # any per-brand "Model" override, so force it from VERTEX_MODEL here.
+                _vmodel = os.environ.get("VERTEX_MODEL", "gemini-live-2.5-flash-native-audio")
+                realtime_kwargs["model"] = _vmodel
+                logger.info("SESSION: Gemini Live via Vertex AI (location=%s, model=%s)",
+                            _vx.get("location"), _vmodel)
             else:
                 logger.warning("GEMINI_USE_VERTEX set but this RealtimeModel build "
                                "doesn't accept vertexai kwargs — using the API-key path")
