@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import time
+from time import perf_counter
 from typing import Optional
 
 from livekit import agents, api
@@ -154,17 +155,21 @@ class AppointmentTools(llm.ToolContext):
         Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
+            _t0 = perf_counter()
             ok, assigned, _info = await find_booking_slot(
                 date, time, location, self._brand_id, self.booking_config, service, resource,
             )
+            logger.info("TOOL check_availability find_booking_slot=%.0f ms", (perf_counter() - _t0) * 1000)
             where = self._slot_label(location, service, resource or (assigned or ""))
             if ok:
                 free_with = f" ({assigned} is free)" if (assigned and not resource) else ""
                 return f"available: {date} at {time}{where}{free_with}"
+            _t1 = perf_counter()
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
                 service=service, resource=resource,
             )
+            logger.info("TOOL check_availability get_next_available=%.0f ms", (perf_counter() - _t1) * 1000)
             choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"unavailable{where}: suggest one of these next available times: {choices}"
         except ValueError as exc:
@@ -186,10 +191,12 @@ class AppointmentTools(llm.ToolContext):
         Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
+            _t0 = perf_counter()
             result = await insert_trial(
                 name, phone, date, time, location, self._brand_id, self.booking_config,
                 service, resource,
             )
+            logger.info("TOOL book_appointment insert_trial=%.0f ms", (perf_counter() - _t0) * 1000)
             self._booking_confirmed = True
             where = self._slot_label(result.get("location", ""), result.get("service", ""), result.get("resource", ""))
             return f"BOOKING CONFIRMED. ID: {result['booking_id']}. Booked {date} at {time}{where}."
