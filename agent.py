@@ -567,6 +567,22 @@ async def entrypoint(ctx: agents.JobContext):
         metrics.log_metrics(event.metrics)
         usage_collector.collect(event.metrics)
 
+    # Per-turn latency probe: TTFT = time from end-of-user-speech to the agent's
+    # first audio. Logs to stdout so `docker logs … | grep "turn TTFT"` shows the
+    # model-leg latency without opening Langfuse. Defensive — never breaks a call.
+    @session.on("conversation_item_added")
+    def _on_item_added(ev):
+        try:
+            item = getattr(ev, "item", None)
+            if not item or getattr(item, "role", None) != "assistant":
+                return
+            m = getattr(item, "metrics", None)
+            ttft = getattr(m, "ttft", None) if m else None
+            if ttft is not None:
+                logger.info("turn TTFT = %.0f ms", ttft * 1000)
+        except Exception:
+            pass
+
     try:
         await session.start(
             agent=agent,
