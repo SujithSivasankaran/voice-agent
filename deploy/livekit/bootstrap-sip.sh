@@ -46,9 +46,9 @@ cat > "$tmp/inbound.json" <<JSON
 JSON
 
 cat > "$tmp/dispatch.json" <<JSON
-{ "name": "inbound-to-agent", "trunk_ids": [],
+{ "dispatch_rule": { "name": "inbound-to-agent", "trunk_ids": [],
   "rule": { "dispatchRuleIndividual": { "roomPrefix": "inbound-call" } },
-  "roomConfig": { "agents": [ { "agentName": "$AGENT_NAME" } ] } }
+  "room_config": { "agents": [ { "agent_name": "$AGENT_NAME" } ] } } }
 JSON
 
 echo "==> Server: $LIVEKIT_URL"
