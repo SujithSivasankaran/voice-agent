@@ -568,21 +568,36 @@ async def entrypoint(ctx: agents.JobContext):
         metrics.log_metrics(event.metrics)
         usage_collector.collect(event.metrics)
 
-    # BISECTION PROBE: in-app response latency — from "user stopped speaking" to
-    # "agent's first audio". EXCLUDES the Vobiz/PSTN transport, so comparing this
-    # to the recording's measured gap isolates model latency vs media-path latency.
-    _resp = {"t": None}
+    # LATENCY TIMELINE: absolute timestamps (ms since session start) for every
+    # turn-boundary event, so ONE call's logs reconstruct exactly where the gap
+    # goes. Read consecutive "TURN " lines for a single turn:
+    #     user_state=listening → you stopped talking (audio level)
+    #     user_final           → transcript committed (after end-of-turn detect)
+    #     agent_state=thinking → model started working
+    #     tools_executed       → tool round-trip finished (only if the turn used one)
+    #     agent_state=speaking → agent's first audio
+    # Then: user_final→speaking = model(+tool); thinking→tools_executed = tool time.
+    _t_session = time.monotonic()
+
+    def _ts():
+        return (time.monotonic() - _t_session) * 1000
 
     @session.on("user_state_changed")
-    def _on_user_state(ev):
-        if getattr(ev, "new_state", None) == "listening":
-            _resp["t"] = time.monotonic()
+    def _tl_user(ev):
+        logger.info("TURN user_state=%s t=%.0f", getattr(ev, "new_state", None), _ts())
+
+    @session.on("user_input_transcribed")
+    def _tl_user_final(ev):
+        if getattr(ev, "is_final", False):
+            logger.info("TURN user_final t=%.0f", _ts())
 
     @session.on("agent_state_changed")
-    def _on_agent_state(ev):
-        if getattr(ev, "new_state", None) == "speaking" and _resp["t"] is not None:
-            logger.info("RESP in-app latency = %.0f ms", (time.monotonic() - _resp["t"]) * 1000)
-            _resp["t"] = None
+    def _tl_agent(ev):
+        logger.info("TURN agent_state=%s t=%.0f", getattr(ev, "new_state", None), _ts())
+
+    @session.on("function_tools_executed")
+    def _tl_tools(ev):
+        logger.info("TURN tools_executed t=%.0f", _ts())
 
     try:
         await session.start(
