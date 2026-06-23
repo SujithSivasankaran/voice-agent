@@ -35,9 +35,10 @@ services:
     network_mode: host
     depends_on:
       - redis
-    # Full server config supplied inline; ${...} is filled by Coolify env at deploy.
+    # Full server config supplied inline via LIVEKIT_CONFIG (the env var the
+    # server actually reads — NOT *_CONFIG_BODY); ${...} filled by Coolify env.
     environment:
-      LIVEKIT_CONFIG_BODY: |
+      LIVEKIT_CONFIG: |
         port: 7880
         rtc:
           tcp_port: 7881
