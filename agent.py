@@ -237,6 +237,7 @@ _google_realtime = None
 _google_beta_realtime = None
 _google_llm = None
 _google_tts = None
+_gemini_tts = None
 
 try:
     from livekit.plugins import google as _gp
@@ -255,6 +256,13 @@ try:
         _google_tts = _gp.TTS
     except AttributeError:
         pass
+    try:
+        # Gemini TTS (Gemini API via GOOGLE_API_KEY) shares Gemini Live's prebuilt
+        # voices, so session.say() can speak in the SAME voice as the live model.
+        _gemini_tts = _gp.beta.GeminiTTS
+        logger.info("Loaded google.beta.GeminiTTS")
+    except AttributeError:
+        logger.info("google.beta.GeminiTTS unavailable (needs livekit-plugins-google>=1.5)")
 except ImportError:
     logger.warning("livekit-plugins-google not installed")
 
@@ -327,17 +335,33 @@ def _build_session(
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
 
-        # Attach a TTS so session.say() can speak a fixed line (e.g. the inbound
-        # greeting) — the realtime model itself ignores say(). The TTS is only
-        # used when we explicitly call say(); normal conversation stays on Gemini.
+        # Attach a TTS so session.say() can speak fixed lines (the inbound greeting
+        # and the outbound opener) — the realtime model itself ignores say(). The TTS
+        # is only used when we explicitly call say(); normal conversation stays on Gemini.
+        # Prefer Gemini TTS so the spoken opener uses the SAME voice as the live model
+        # (it reads GOOGLE_API_KEY and shares Gemini's prebuilt voices, e.g. Kore);
+        # fall back to Deepgram only if the Gemini TTS class isn't available here.
         session_kwargs: dict = {"llm": RealtimeClass(**realtime_kwargs)}
-        if _deepgram_tts is not None:
+        greeting_tts = None
+        if _gemini_tts is not None:
             try:
-                session_kwargs["tts"] = _deepgram_tts(
+                greeting_tts = _gemini_tts(
+                    model=os.environ.get("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
+                    voice_name=gemini_voice,
+                )
+                logger.info("Greeting TTS: Gemini TTS (voice=%s)", gemini_voice)
+            except Exception as exc:
+                logger.warning("Could not attach Gemini greeting TTS (%s)", exc)
+        if greeting_tts is None and _deepgram_tts is not None:
+            try:
+                greeting_tts = _deepgram_tts(
                     model=os.environ.get("DEEPGRAM_TTS_MODEL", "aura-asteria-en")
                 )
+                logger.info("Greeting TTS: Deepgram fallback")
             except Exception as exc:
-                logger.warning("Could not attach greeting TTS (%s)", exc)
+                logger.warning("Could not attach Deepgram greeting TTS (%s)", exc)
+        if greeting_tts is not None:
+            session_kwargs["tts"] = greeting_tts
         return AgentSession(**session_kwargs)
 
     if _google_llm is None:
@@ -498,6 +522,15 @@ async def entrypoint(ctx: agents.JobContext):
         # Campaign/call-specific script wins; otherwise the brand's outbound
         # prompt (and finally the built-in compact default) is used.
         system_prompt = build_prompt(lead_name, brand, custom_prompt)
+        # The opener is spoken up front via session.say() once the lead answers, so
+        # tell the model not to greet again — otherwise it may repeat the opening
+        # line when the caller replies (same approach the inbound prompt uses).
+        system_prompt += (
+            "\n\nNOTE: The call has just connected and your opening line has ALREADY "
+            "been spoken aloud to the caller. Do not greet again, re-introduce yourself, "
+            "or repeat your opening — simply respond to the caller's reply and continue "
+            "the call flow."
+        )
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
@@ -585,22 +618,21 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception as exc:
                 logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
         else:
-            # Outbound: make the model speak first. A realtime audio model waits for
-            # input and won't open on its own, so we trigger one model turn the moment
-            # the lead answers. generate_reply works on 2.5 native-audio but is ignored
-            # by Gemini 3.1 models, so this is best-effort: on failure the agent simply
-            # greets reactively once the lead speaks.
+            # Outbound: speak the opener the moment the lead answers. A realtime audio
+            # model waits for input and won't open on its own, and generate_reply() is
+            # ignored by Gemini 3.1, so we deliver a fixed opening line via session.say()
+            # (TTS). This works on any model and keeps us on the fast 3.1 model. The
+            # system prompt is told the opener was already spoken so the model does not
+            # repeat it (see the NOTE appended in the prompt-build section above).
+            greet_assistant = brand.get("assistant_name") or "Tina"
+            greet_brand = brand.get("name") or "Harry's Fitcamp"
             who = lead_name if (lead_name and lead_name != "there") else ""
-            open_instructions = (
-                "The call just connected and the person has answered. Greet immediately and "
-                + (f"confirm you are speaking with {who}, " if who else "")
-                + "open the call now exactly as your opening instructions describe. "
-                "Keep it to one short sentence and then wait for their reply."
-            )
+            greeting = (f"Hi, am I speaking with {who}?" if who
+                        else f"Hi, this is {greet_assistant} from {greet_brand}.")
             try:
-                await session.generate_reply(instructions=open_instructions)
+                await session.say(greeting, allow_interruptions=True)
             except Exception as exc:
-                logger.warning("Outbound opener via generate_reply() failed (%s) — agent will greet reactively", exc)
+                logger.warning("Outbound opener via say() failed (%s) — agent will greet reactively", exc)
 
         # SIP hang-up is the normal stop signal. This post-answer limit is only
         # a final guard against abandoned jobs.
