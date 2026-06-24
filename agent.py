@@ -27,7 +27,7 @@ def _certifi_ssl(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
     return _orig_ssl(purpose, **kwargs)
 ssl.create_default_context = _certifi_ssl
 
-from livekit import agents, api, rtc
+from livekit import agents, api
 from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
@@ -335,15 +335,12 @@ def _build_session(
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
 
-        # TTS ATTACHED to the session for session.say(). This is used for the INBOUND
-        # greeting and as the OUTBOUND opener's *fallback* only. The outbound opener's
-        # primary path pre-renders Gemini TTS (Kore) ahead of time and already matches
-        # the live voice (see _prerender_greeting / PRESYNTH_OPENER), so it does NOT use
-        # this attached TTS unless that pre-synthesis is disabled or fails.
-        # Here: Deepgram (aura) streams first audio in ~200ms but in a different voice;
-        # Gemini TTS matches the live voice but is slower to start. Default to Deepgram
-        # for the fast fallback; set GREETING_TTS=gemini to use the matching voice for
-        # the inbound greeting / fallback too. Either way the other is the backup.
+        # TTS ATTACHED to the session for session.say() — used only for the INBOUND
+        # greeting (outbound has no scripted opener). Deepgram (aura) streams first
+        # audio in ~200ms but in a different voice; Gemini TTS matches the live voice
+        # but is slower to start. Default to Deepgram for speed; set GREETING_TTS=gemini
+        # to greet inbound callers in the matching Gemini voice instead. Either way the
+        # other is used as a fallback if the preferred one is unavailable.
         session_kwargs: dict = {"llm": RealtimeClass(**realtime_kwargs)}
         prefer_gemini = os.environ.get("GREETING_TTS", "deepgram").strip().lower() == "gemini"
 
@@ -383,47 +380,6 @@ def _build_session(
     tts = _google_tts() if _google_tts else None
     vad = silero.VAD.load()
     return AgentSession(stt=stt, llm=_google_llm(model=gemini_model), tts=tts, vad=vad)
-
-
-# ── Opener pre-synthesis ──────────────────────────────────────────────────────
-
-async def _aiter_frames(frames):
-    """Yield buffered audio frames so session.say(audio=...) can replay pre-rendered
-    TTS with no generation delay."""
-    for frame in frames:
-        yield frame
-
-
-async def _prerender_greeting(text: str, voice: str):
-    """Synthesize `text` with Gemini TTS (matching the live voice) ahead of time and
-    return the buffered rtc.AudioFrames. Lets session.say() play the opener instantly
-    instead of waiting for generative TTS on the critical path. Returns None if Gemini
-    TTS is unavailable or synthesis fails (the caller then falls back to a live say())."""
-    if _gemini_tts is None or not text:
-        return None
-    tts = None
-    try:
-        tts = _gemini_tts(
-            model=os.environ.get("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
-            voice_name=voice,
-        )
-        frames = []
-        async for ev in tts.synthesize(text):
-            frame = getattr(ev, "frame", None)
-            if frame is None and isinstance(ev, rtc.AudioFrame):
-                frame = ev
-            if frame is not None:
-                frames.append(frame)
-        return frames or None
-    except Exception as exc:
-        logger.warning("Opener pre-synthesis failed (%s)", exc)
-        return None
-    finally:
-        if tts is not None:
-            try:
-                await tts.aclose()
-            except Exception:
-                pass
 
 
 # ── Main entrypoint ───────────────────────────────────────────────────────────
@@ -571,15 +527,6 @@ async def entrypoint(ctx: agents.JobContext):
         # Campaign/call-specific script wins; otherwise the brand's outbound
         # prompt (and finally the built-in compact default) is used.
         system_prompt = build_prompt(lead_name, brand, custom_prompt)
-        # The opener is spoken up front via session.say() once the lead answers, so
-        # tell the model not to greet again — otherwise it may repeat the opening
-        # line when the caller replies (same approach the inbound prompt uses).
-        system_prompt += (
-            "\n\nNOTE: The call has just connected and your opening line has ALREADY "
-            "been spoken aloud to the caller. Do not greet again, re-introduce yourself, "
-            "or repeat your opening — simply respond to the caller's reply and continue "
-            "the call flow."
-        )
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
@@ -649,24 +596,6 @@ async def entrypoint(ctx: agents.JobContext):
         metrics.log_metrics(event.metrics)
         usage_collector.collect(event.metrics)
 
-    # Outbound opener: render the Kore-voiced opening line with Gemini TTS *now*,
-    # concurrently with session.start() below, so it's ready to play the instant the
-    # audio track goes live — no sequential generative-TTS delay. This starts only
-    # after the call was answered (we're past the SIP dial), so unanswered calls are
-    # never charged for it. Falls back to a live say() if pre-synthesis is disabled,
-    # unavailable, or fails.
-    opener_text = None
-    opener_task = None
-    if not is_inbound:
-        greet_assistant = brand.get("assistant_name") or "Tina"
-        greet_brand = brand.get("name") or "Harry's Fitcamp"
-        who = lead_name if (lead_name and lead_name != "there") else ""
-        opener_text = (f"Hi, am I speaking with {who}?" if who
-                       else f"Hi, this is {greet_assistant} from {greet_brand}.")
-        if _gemini_tts is not None and os.environ.get("PRESYNTH_OPENER", "true").strip().lower() != "false":
-            opener_voice = session_voice or os.environ.get("GEMINI_TTS_VOICE", "Aoede")
-            opener_task = asyncio.create_task(_prerender_greeting(opener_text, opener_voice))
-
     try:
         await session.start(
             agent=agent,
@@ -684,27 +613,8 @@ async def entrypoint(ctx: agents.JobContext):
                 await session.say(greeting, allow_interruptions=True)
             except Exception as exc:
                 logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
-        else:
-            # Play the pre-rendered Gemini (Kore) opener if it's ready; otherwise fall
-            # back to a live say() through the session's attached TTS (Deepgram). The
-            # system prompt already tells the model the opener was spoken (NOTE appended
-            # in the prompt-build section), so it won't repeat it.
-            opener_frames = None
-            if opener_task is not None:
-                try:
-                    opener_frames = await opener_task
-                except Exception as exc:
-                    logger.warning("Opener pre-synthesis await failed (%s)", exc)
-            try:
-                if opener_frames:
-                    await session.say(opener_text, audio=_aiter_frames(opener_frames),
-                                      allow_interruptions=True)
-                    logger.info("Outbound opener: pre-rendered Gemini TTS (%d frames)", len(opener_frames))
-                else:
-                    await session.say(opener_text, allow_interruptions=True)
-                    logger.info("Outbound opener: live say() fallback")
-            except Exception as exc:
-                logger.warning("Outbound opener via say() failed (%s) — agent will greet reactively", exc)
+        # Outbound: no scripted opener. The agent greets reactively — it replies as
+        # soon as the lead speaks — which avoids the post-pickup say()/TTS delay.
 
         # SIP hang-up is the normal stop signal. This post-answer limit is only
         # a final guard against abandoned jobs.
@@ -720,10 +630,6 @@ async def entrypoint(ctx: agents.JobContext):
         fallback_reason = f"agent session failed: {exc}"
         logger.exception("Agent session failed")
     finally:
-        # Cancel an unconsumed opener pre-synthesis task (e.g. if session.start failed
-        # before we awaited it), so it never dangles.
-        if opener_task is not None and not opener_task.done():
-            opener_task.cancel()
         # Capture the conversation transcript while the session (and its chat
         # history) is still alive — before aclose() tears the connection down.
         transcript = _extract_transcript(session)
