@@ -584,6 +584,23 @@ async def entrypoint(ctx: agents.JobContext):
                 await session.say(greeting, allow_interruptions=True)
             except Exception as exc:
                 logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
+        else:
+            # Outbound: make the model speak first. A realtime audio model waits for
+            # input and won't open on its own, so we trigger one model turn the moment
+            # the lead answers. generate_reply works on 2.5 native-audio but is ignored
+            # by Gemini 3.1 models, so this is best-effort: on failure the agent simply
+            # greets reactively once the lead speaks.
+            who = lead_name if (lead_name and lead_name != "there") else ""
+            open_instructions = (
+                "The call just connected and the person has answered. Greet immediately and "
+                + (f"confirm you are speaking with {who}, " if who else "")
+                + "open the call now exactly as your opening instructions describe. "
+                "Keep it to one short sentence and then wait for their reply."
+            )
+            try:
+                await session.generate_reply(instructions=open_instructions)
+            except Exception as exc:
+                logger.warning("Outbound opener via generate_reply() failed (%s) — agent will greet reactively", exc)
 
         # SIP hang-up is the normal stop signal. This post-answer limit is only
         # a final guard against abandoned jobs.
