@@ -527,16 +527,18 @@ async def entrypoint(ctx: agents.JobContext):
         # Campaign/call-specific script wins; otherwise the brand's outbound
         # prompt (and finally the built-in compact default) is used.
         system_prompt = build_prompt(lead_name, brand, custom_prompt)
-        # We speak the opening line aloud (Deepgram) the moment the lead answers, so
-        # tell the model the greeting already happened — otherwise it repeats it when
-        # the caller replies. This holds no matter what the brand's script says
-        # (hand-written or AI-generated), so double-greeting is always prevented.
-        system_prompt += (
-            "\n\nNOTE: The call has just connected and your opening greeting has ALREADY "
-            "been spoken aloud to the caller. Do not greet again, re-introduce yourself, "
-            "or repeat your opening line — respond directly to the caller's reply and "
-            "continue the call flow (e.g. handle their answer to who you're speaking with)."
-        )
+
+    # Both directions speak the opening greeting aloud (Deepgram) on pickup, so tell the
+    # model — regardless of its script (default, generic, or a brand's own custom prompt) —
+    # that the greeting already happened. Applying this at runtime (not relying on the
+    # prompt template) guarantees no double-introduction even for brand-supplied prompts
+    # that omit the built-in "greeting already spoken" line.
+    system_prompt += (
+        "\n\nNOTE: The call has just connected and your opening greeting has ALREADY been "
+        "spoken aloud to the caller. Do NOT greet again, re-introduce yourself, say hello, "
+        "or repeat your opening line. Respond directly to the caller's reply and continue "
+        "the call flow (for outbound, handle their answer to who you're speaking with)."
+    )
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
