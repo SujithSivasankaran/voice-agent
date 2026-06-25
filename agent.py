@@ -527,6 +527,16 @@ async def entrypoint(ctx: agents.JobContext):
         # Campaign/call-specific script wins; otherwise the brand's outbound
         # prompt (and finally the built-in compact default) is used.
         system_prompt = build_prompt(lead_name, brand, custom_prompt)
+        # We speak the opening line aloud (Deepgram) the moment the lead answers, so
+        # tell the model the greeting already happened — otherwise it repeats it when
+        # the caller replies. This holds no matter what the brand's script says
+        # (hand-written or AI-generated), so double-greeting is always prevented.
+        system_prompt += (
+            "\n\nNOTE: The call has just connected and your opening greeting has ALREADY "
+            "been spoken aloud to the caller. Do not greet again, re-introduce yourself, "
+            "or repeat your opening line — respond directly to the caller's reply and "
+            "continue the call flow (e.g. handle their answer to who you're speaking with)."
+        )
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
@@ -613,8 +623,19 @@ async def entrypoint(ctx: agents.JobContext):
                 await session.say(greeting, allow_interruptions=True)
             except Exception as exc:
                 logger.warning("Inbound greeting via say() failed (%s) — agent will greet reactively", exc)
-        # Outbound: no scripted opener. The agent greets reactively — it replies as
-        # soon as the lead speaks — which avoids the post-pickup say()/TTS delay.
+        else:
+            # Outbound: speak the opener aloud the moment the lead answers, the same
+            # way inbound does — via the session's attached TTS (Deepgram by default,
+            # fast first audio). The prompt NOTE above stops the model re-greeting.
+            greet_assistant = brand.get("assistant_name") or "Tina"
+            greet_brand = brand.get("name") or "Harry's Fitcamp"
+            who = lead_name if (lead_name and lead_name != "there") else ""
+            greeting = (f"Hi, am I speaking with {who}?" if who
+                        else f"Hi, this is {greet_assistant} from {greet_brand}.")
+            try:
+                await session.say(greeting, allow_interruptions=True)
+            except Exception as exc:
+                logger.warning("Outbound greeting via say() failed (%s) — agent will greet reactively", exc)
 
         # SIP hang-up is the normal stop signal. This post-answer limit is only
         # a final guard against abandoned jobs.

@@ -145,25 +145,31 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def check_availability(
         self, date: str, time: str, location: str = "", service: str = "", resource: str = "",
+        end_time: str = "",
     ) -> str:
         """
         Check whether a slot is free before booking. Call after collecting the details.
         service: only when the business offers multiple services (use the named service).
         location: only when the business has more than one location.
         resource: only when the business lets the caller pick a person/court/room.
+        end_time: only for open-hours businesses when the caller wants a longer block
+          (e.g. 06:00 to 07:30). Pass the caller's requested end (HH:MM); the block length
+          must be a whole multiple of the slot interval. Omit for a single standard slot.
         Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
             ok, assigned, _info = await find_booking_slot(
                 date, time, location, self._brand_id, self.booking_config, service, resource,
+                end_time or None,
             )
             where = self._slot_label(location, service, resource or (assigned or ""))
+            span = f" to {end_time}" if end_time else ""
             if ok:
                 free_with = f" ({assigned} is free)" if (assigned and not resource) else ""
-                return f"available: {date} at {time}{where}{free_with}"
+                return f"available: {date} at {time}{span}{where}{free_with}"
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
-                service=service, resource=resource,
+                service=service, resource=resource, end_time=end_time or None,
             )
             choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"unavailable{where}: suggest one of these next available times: {choices}"
@@ -176,27 +182,31 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def book_appointment(
         self, name: str, phone: str, date: str, time: str,
-        location: str = "", service: str = "", resource: str = "",
+        location: str = "", service: str = "", resource: str = "", end_time: str = "",
     ) -> str:
         """
         Atomically book the slot after the caller confirms every detail.
         service: only when the business offers multiple services.
         location: only when the business has more than one location.
         resource: only when the caller may pick a specific person/court/room.
+        end_time: only for open-hours businesses booking a longer block — pass the
+          caller's confirmed end (HH:MM); the block length must be a multiple of the slot
+          interval. Omit for a single standard slot. (See check_availability.)
         Omit any field that doesn't apply. date: YYYY-MM-DD | time: HH:MM (24-hour)
         """
         try:
             result = await insert_trial(
                 name, phone, date, time, location, self._brand_id, self.booking_config,
-                service, resource,
+                service, resource, end_time or None,
             )
             self._booking_confirmed = True
             where = self._slot_label(result.get("location", ""), result.get("service", ""), result.get("resource", ""))
-            return f"BOOKING CONFIRMED. ID: {result['booking_id']}. Booked {date} at {time}{where}."
+            span = f" to {end_time}" if end_time else ""
+            return f"BOOKING CONFIRMED. ID: {result['booking_id']}. Booked {date} at {time}{span}{where}."
         except TrialSlotUnavailable:
             alternatives = await get_next_available_trial_slots(
                 date, time, location, brand_id=self._brand_id, config=self.booking_config,
-                service=service, resource=resource,
+                service=service, resource=resource, end_time=end_time or None,
             )
             choices = ", ".join(alternatives) or "no preset slots — ask the caller for another time"
             return f"NOT BOOKED: that slot was just taken. Ask the caller to choose from: {choices}."

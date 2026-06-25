@@ -331,8 +331,18 @@ def _attach_trial_booking_rules(prompt: str, booking_config: dict = None) -> str
 
     # Time model
     if slot_mode == "open_hours" and open_hours.get("start") and open_hours.get("end"):
-        rules.append(f"A booking may start at any time between {open_hours['start']} and {open_hours['end']}, "
-                     "and lasts the service's duration.")
+        try:
+            slot_interval = int(cfg.get("slot_interval_minutes") or 30)
+        except (TypeError, ValueError):
+            slot_interval = 30
+        rules.append(
+            f"Bookings run between {open_hours['start']} and {open_hours['end']}, in {slot_interval}-minute "
+            f"slots. The caller can book one slot or several back-to-back slots. To book more than one, collect "
+            f"the start AND end time and pass both (set end_time on check_availability and book_appointment); "
+            f"the total length must be a whole multiple of {slot_interval} minutes. If the caller asks for a "
+            f"length that is not a multiple of {slot_interval} minutes, explain bookings are in "
+            f"{slot_interval}-minute blocks and ask them to pick a start/end that fits."
+        )
     elif slot_times:
         rules.append("Offer these start times: " + ", ".join(slot_times) + ".")
 

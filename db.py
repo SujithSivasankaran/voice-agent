@@ -230,6 +230,7 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
             "slot_mode": "fixed",
             "open_hours": {},
             "slot_interval_minutes": 30,
+            "align_start_to_grid": True,
             "services": [],
             "resources": (),
             "capacity_per_slot": 1,
@@ -277,6 +278,17 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
     except (TypeError, ValueError):
         slot_interval = 30
 
+    # Whether a range booking's start must sit on the interval grid (open-hours mode).
+    # True → only open_start, +interval, +2·interval… are valid starts; False → any
+    # start is fine as long as the block length is a whole multiple of the interval.
+    raw_align = config.get("align_start_to_grid")
+    if raw_align is None:
+        align_start_to_grid = True
+    elif isinstance(raw_align, str):
+        align_start_to_grid = raw_align.strip().lower() not in ("false", "0", "no", "")
+    else:
+        align_start_to_grid = bool(raw_align)
+
     # Pooled capacity: absent/blank → 1; explicit 0 → unlimited. Ignored in resource mode.
     raw_cap = config.get("capacity_per_slot")
     if raw_cap in (None, ""):
@@ -295,6 +307,7 @@ def resolve_booking_config(config: Optional[dict]) -> dict:
         "slot_mode": slot_mode,
         "open_hours": open_hours,
         "slot_interval_minutes": slot_interval,
+        "align_start_to_grid": align_start_to_grid,
         "services": services,
         "resources": resources,
         "capacity_per_slot": capacity,
@@ -372,10 +385,14 @@ def resolve_resource(resource: str, config: Optional[dict] = None):
     raise ValueError("must be one of: " + ", ".join(resources))
 
 
-def _prepare_booking(date, time, location, service, resource, config) -> dict:
+def _prepare_booking(date, time, location, service, resource, config, end_time=None) -> dict:
     """Validate + normalise a requested booking against the brand's rules. Returns
     the resolved slot (with end_time and canonical service/resource/location) or
-    raises ValueError describing what to fix."""
+    raises ValueError describing what to fix.
+
+    end_time (open-hours brands only): book the whole [start, end) block instead of the
+    fixed service duration. The block length must be a whole multiple of the slot
+    interval, and — when align_start_to_grid is set — the start must sit on the grid."""
     cfg = resolve_booking_config(config)
     location = normalize_trial_location(location, config)
     svc_name, duration = resolve_service(service, config)
@@ -387,16 +404,39 @@ def _prepare_booking(date, time, location, service, resource, config) -> dict:
     if cfg["off_days"] and start_dt.weekday() in cfg["off_days"]:
         raise ValueError("bookings are unavailable on that day")
     start_min = _hhmm_to_min(time)
-    end_min = start_min + duration
+    # Range booking: caller supplied an end time → book the whole block; its length
+    # overrides the fixed service duration. Only honoured in open-hours mode.
+    range_mode = bool(end_time) and cfg["slot_mode"] == "open_hours"
+    if range_mode:
+        try:
+            end_min = _hhmm_to_min(end_time)
+        except Exception as exc:
+            raise ValueError("end time must use HH:MM") from exc
+        if end_min <= start_min:
+            raise ValueError("the end time must be after the start time")
+        duration = end_min - start_min
+    else:
+        end_min = start_min + duration
     if cfg["slot_mode"] == "fixed":
         if cfg["slot_times"] and time not in cfg["slot_times"]:
             raise ValueError("time must be one of: " + ", ".join(cfg["slot_times"]))
     else:
         oh = cfg["open_hours"]
-        if oh.get("start") and oh.get("end"):
-            o_start, o_end = _hhmm_to_min(oh["start"]), _hhmm_to_min(oh["end"])
-            if start_min < o_start or end_min > o_end:
-                raise ValueError(f"time must be within {oh['start']}-{oh['end']}")
+        o_start = _hhmm_to_min(oh["start"]) if oh.get("start") else None
+        o_end = _hhmm_to_min(oh["end"]) if oh.get("end") else None
+        if o_start is not None and o_end is not None and (start_min < o_start or end_min > o_end):
+            raise ValueError(f"time must be within {oh['start']}-{oh['end']}")
+        if range_mode:
+            interval = max(1, int(cfg["slot_interval_minutes"]))
+            if duration % interval != 0:
+                raise ValueError(
+                    f"bookings are in {interval}-minute blocks, so the length must be a "
+                    f"multiple of {interval} minutes — ask the caller to adjust the time"
+                )
+            if cfg["align_start_to_grid"] and o_start is not None and (start_min - o_start) % interval != 0:
+                raise ValueError(
+                    f"the start must fall on a {interval}-minute boundary from {oh['start']}"
+                )
     if start_dt <= datetime.now(IST).replace(tzinfo=None):
         raise ValueError("the slot must be in the future")
     return {
@@ -458,9 +498,9 @@ async def _booked_rows(brand_id, date, location) -> list:
     return (await q.execute()).data or []
 
 
-async def find_booking_slot(date, time, location, brand_id=None, config=None, service=None, resource=None):
+async def find_booking_slot(date, time, location, brand_id=None, config=None, service=None, resource=None, end_time=None):
     """Validate + check availability. Returns (ok, assigned_resource, info)."""
-    info = _prepare_booking(date, time, location, service, resource, config)
+    info = _prepare_booking(date, time, location, service, resource, config, end_time)
     rows = await _booked_rows(brand_id, date, info["location"])
     ok, assigned = _evaluate_availability(
         info["cfg"], info["resource"], info["start_min"], info["end_min"], rows
@@ -472,9 +512,10 @@ async def check_trial_slot(
     date: str, time: str, location: str,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
     service: Optional[str] = None, resource: Optional[str] = None,
+    end_time: Optional[str] = None,
 ) -> bool:
     """True if the requested booking fits (capacity not full / a resource is free)."""
-    ok, _assigned, _info = await find_booking_slot(date, time, location, brand_id, config, service, resource)
+    ok, _assigned, _info = await find_booking_slot(date, time, location, brand_id, config, service, resource, end_time)
     return ok
 
 
@@ -499,13 +540,26 @@ async def get_next_available_trial_slots(
     date: str, time: str, location: str, limit: int = 3,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
     service: Optional[str] = None, resource: Optional[str] = None,
+    end_time: Optional[str] = None,
 ) -> list[str]:
-    """Next available start times for the requested service/location/resource."""
+    """Next available start times for the requested service/location/resource. When a
+    custom range (end_time) was requested, suggest starts that fit that block length."""
     cfg = resolve_booking_config(config)
     try:
         _svc, duration = resolve_service(service, config)
     except ValueError:
         duration = cfg["duration_minutes"]
+    # For a range request, look for starts where the full requested block is free.
+    range_mode = bool(end_time) and cfg["slot_mode"] == "open_hours"
+    if range_mode:
+        try:
+            req = _hhmm_to_min(end_time) - _hhmm_to_min(time)
+            if req > 0:
+                duration = req
+            else:
+                range_mode = False
+        except Exception:
+            range_mode = False
     try:
         requested = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError:
@@ -520,8 +574,9 @@ async def get_next_available_trial_slots(
             candidate = datetime.strptime(f"{day.isoformat()} {slot_time}", "%Y-%m-%d %H:%M")
             if candidate <= start:
                 continue
+            cand_end = _min_to_hhmm(_hhmm_to_min(slot_time) + duration) if range_mode else None
             try:
-                if await check_trial_slot(day.isoformat(), slot_time, location, brand_id, config, service, resource):
+                if await check_trial_slot(day.isoformat(), slot_time, location, brand_id, config, service, resource, cand_end):
                     found.append(f"{day.isoformat()} at {slot_time}")
                     if len(found) >= limit:
                         return found
@@ -551,10 +606,11 @@ async def insert_trial(
     name: str, phone: str, date: str, time: str, location: str,
     brand_id: Optional[str] = None, config: Optional[dict] = None,
     service: Optional[str] = None, resource: Optional[str] = None,
+    end_time: Optional[str] = None,
 ) -> dict:
     """Atomically book a slot. Returns the booking details (booking_id, service,
     resource, time, end_time, location). Raises TrialSlotUnavailable if full."""
-    ok, assigned, info = await find_booking_slot(date, time, location, brand_id, config, service, resource)
+    ok, assigned, info = await find_booking_slot(date, time, location, brand_id, config, service, resource, end_time)
     if not ok:
         raise TrialSlotUnavailable("that slot is fully booked")
     cfg = info["cfg"]
