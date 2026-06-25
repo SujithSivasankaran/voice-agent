@@ -1218,6 +1218,7 @@ async def create_brand(
     outbound_prompt: Optional[str] = None, inbound_prompt: Optional[str] = None,
     business_context: Optional[str] = None, booking_config: str = "{}",
     voice: Optional[str] = None, model: Optional[str] = None, is_default: bool = False,
+    greeting: Optional[str] = None,
 ) -> str:
     brand_id = str(uuid.uuid4())
     db = await _adb()
@@ -1228,6 +1229,7 @@ async def create_brand(
         "inbound_numbers": inbound_numbers, "outbound_prompt": outbound_prompt,
         "inbound_prompt": inbound_prompt, "business_context": business_context,
         "booking_config": booking_config, "voice": voice, "model": model,
+        "greeting": greeting,
         "is_default": 1 if is_default else 0, "created_at": _now_iso(),
     }).execute()
     return brand_id

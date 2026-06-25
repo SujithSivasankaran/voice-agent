@@ -532,6 +532,24 @@ def build_inbound_prompt(
     return _finish_prompt(out, brand_name, assistant_name, facts, booking_config, attach_booking)
 
 
+def build_greeting(lead_name: str = "there", brand: dict = None, is_inbound: bool = False) -> str:
+    """The opening line spoken aloud on pickup (via TTS). Uses the brand's own
+    `greeting` field (with {lead_name}/{assistant_name}/{brand_name} filled in) when set;
+    otherwise a sensible per-direction default. The system prompt is separately told this
+    was already spoken, so the model never repeats it."""
+    brand = brand or {}
+    assistant_name = brand.get("assistant_name") or "Tina"
+    brand_name = brand.get("name") or "Harry's Fitcamp"
+    raw = (brand.get("greeting") or "").strip()
+    if raw:
+        return _fill_prompt_placeholders(raw, lead_name, brand_name, assistant_name)
+    if is_inbound:
+        return f"Hi, this is {assistant_name} from {brand_name}. How can I help you?"
+    clean_lead = (lead_name or "").strip() if isinstance(lead_name, str) else ""
+    who = clean_lead if (clean_lead and clean_lead != "there") else ""
+    return f"Hi, am I speaking with {who}?" if who else f"Hi, this is {assistant_name} from {brand_name}."
+
+
 # ── Campaign prompt generation & assembly ───────────────────────────────────────
 
 # Instruction template sent to the LLM to turn a campaign's plain-English purpose
@@ -586,7 +604,7 @@ GLOBAL RULES (apply to both scripts):
   over the caller.
 - Facts: use only what's in the description; never invent prices, offers, addresses, or numbers.
 
-Produce THREE things:
+Produce FOUR things:
 
 1. business_context — the authoritative FACTS as concise bullet points (what the business does,
    services/offers, hours, pricing, locations). Only what is in or clearly implied by the description.
@@ -605,11 +623,16 @@ Produce THREE things:
    greeting is already spoken, so do not repeat it. Do NOT assume the caller's name — ask only if needed.
    Handle the caller's reason first, answer using the facts, help with bookings, escalate complex issues.
 
+4. greeting — the single opening line {assistant_name} says out loud the moment the call connects, before
+   anything else. One short, warm sentence. For an outbound-style opener use the literal token {{lead_name}}
+   if it addresses the person (e.g. "Hi, am I speaking with {{lead_name}}?"); otherwise a general opener with
+   {assistant_name} and {brand_name} (e.g. "Hi, this is {assistant_name} from {brand_name} — how can I help?").
+
 Do NOT restate generic rules about hanging up, revealing internal details, pacing, or confirming bookings
 only after the tool succeeds — those are added automatically. Keep each script focused, not bloated.
 
 Return ONLY valid JSON, no markdown, with exactly these keys:
-{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>"}}
+{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>", "greeting": "<one-line opening greeting>"}}
 """
 
 
@@ -635,9 +658,12 @@ automatically.
 ── Current inbound prompt ──
 {inbound_prompt}
 
+── Current greeting (spoken first) ──
+{greeting}
+
 Return the FULL revised text for every field (return a field unchanged if the feedback doesn't touch it).
 Return ONLY valid JSON, no markdown, with exactly these keys:
-{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>"}}
+{{"business_context": "<facts>", "outbound_prompt": "<outbound script>", "inbound_prompt": "<inbound script>", "greeting": "<one-line opening greeting>"}}
 """
 
 

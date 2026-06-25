@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS brands (
     booking_config TEXT DEFAULT '{}',   -- JSON: locations, slot_times, duration_minutes, off_days, pricing_text, transfer_number
     voice TEXT,                         -- optional Gemini voice override
     model TEXT,                         -- optional model override
+    greeting TEXT,                      -- spoken opening line (placeholders: {lead_name}/{assistant_name}/{brand_name})
     is_default INTEGER DEFAULT 0,       -- brand used when no DID match / no brand_id supplied
     created_at TEXT NOT NULL
 );

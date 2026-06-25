@@ -814,6 +814,10 @@
         </div>
       </div>
       <div class="form-group">
+        <label>Greeting <span style="text-transform:none;font-weight:400;color:var(--muted)">(spoken first, the instant the call connects — blank uses the default)</span></label>
+        <input id="br-greeting" maxlength="300" placeholder="e.g. Hi, am I speaking with {lead_name}?   ·   tokens: {lead_name}, {assistant_name}, {brand_name}" />
+      </div>
+      <div class="form-group">
         <label>Outbound Prompt <span style="text-transform:none;font-weight:400;color:var(--muted)">(general outgoing calls — blank uses the default)</span></label>
         <textarea id="br-outbound" maxlength="8000" oninput="updateCharCount(this)" rows="5" placeholder="The default script the agent uses for this brand's outbound calls…"></textarea>
         <div id="br-outbound-count" class="char-count" style="font-size:11px;color:var(--muted);text-align:right"></div>
@@ -1479,6 +1483,7 @@ function _setBrandForm(b, def) {
   document.getElementById('br-assistant').value = b.assistant_name || '';
   document.getElementById('br-voice').value = b.voice || '';
   document.getElementById('br-model').value = b.model || '';
+  document.getElementById('br-greeting').value = b.greeting || '';
   let nums = [];
   try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
   document.getElementById('br-numbers').value = nums.join(', ');
@@ -1516,6 +1521,7 @@ async function generateBrandPrompts() {
     if (r.outbound_prompt)  document.getElementById('br-outbound').value = r.outbound_prompt;
     if (r.inbound_prompt)   document.getElementById('br-inbound').value = r.inbound_prompt;
     if (r.business_context) document.getElementById('br-context').value = r.business_context;
+    if (r.greeting)         document.getElementById('br-greeting').value = r.greeting;
     status.textContent = '✅ Drafted — review/edit the fields below, then Save.';
     toast('Prompts generated');
   } catch(e) {
@@ -1536,6 +1542,7 @@ async function refineBrandPrompts() {
     outbound_prompt: document.getElementById('br-outbound').value,
     inbound_prompt: document.getElementById('br-inbound').value,
     business_context: document.getElementById('br-context').value,
+    greeting: document.getElementById('br-greeting').value,
   };
   try {
     const r = await api('/brands/refine', { method: 'POST', body: JSON.stringify({
@@ -1547,6 +1554,7 @@ async function refineBrandPrompts() {
     if (typeof r.outbound_prompt === 'string')  { document.getElementById('br-outbound').value = r.outbound_prompt; updateCharCount(document.getElementById('br-outbound')); }
     if (typeof r.inbound_prompt === 'string')   { document.getElementById('br-inbound').value = r.inbound_prompt; updateCharCount(document.getElementById('br-inbound')); }
     if (typeof r.business_context === 'string') { document.getElementById('br-context').value = r.business_context; updateCharCount(document.getElementById('br-context')); }
+    if (typeof r.greeting === 'string')         { document.getElementById('br-greeting').value = r.greeting; }
     document.getElementById('br-feedback').value = '';
     _refineBackup = snapshot;   // enable Undo
     document.getElementById('br-refine-undo').style.display = '';
@@ -1563,6 +1571,7 @@ function undoBrandRefine() {
   document.getElementById('br-outbound').value = _refineBackup.outbound_prompt;
   document.getElementById('br-inbound').value = _refineBackup.inbound_prompt;
   document.getElementById('br-context').value = _refineBackup.business_context;
+  document.getElementById('br-greeting').value = _refineBackup.greeting;
   ['br-outbound', 'br-inbound', 'br-context'].forEach(id => updateCharCount(document.getElementById(id)));
   _refineBackup = null;
   document.getElementById('br-refine-undo').style.display = 'none';
@@ -1605,6 +1614,7 @@ async function saveBrand() {
     booking_config: JSON.stringify(booking),
     voice: document.getElementById('br-voice').value,
     model: document.getElementById('br-model').value,
+    greeting: document.getElementById('br-greeting').value.trim(),
     is_default: document.getElementById('br-default').checked,
   };
   const id = document.getElementById('br-edit-id').value;

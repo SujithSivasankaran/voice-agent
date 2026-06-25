@@ -194,6 +194,7 @@ async def _generate_brand_assets(description: str, brand_name: str, assistant_na
             "business_context": (data.get("business_context") or "").strip(),
             "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
             "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+            "greeting": (data.get("greeting") or "").strip(),
         }
     await log_error("server", "Brand prompt generation failed", brand_name, "error")
     return {}
@@ -213,6 +214,7 @@ async def _refine_brand_assets(feedback: str, current: dict, brand_name: str, as
         business_context=current.get("business_context") or "(none)",
         outbound_prompt=current.get("outbound_prompt") or "(none)",
         inbound_prompt=current.get("inbound_prompt") or "(none)",
+        greeting=current.get("greeting") or "(none)",
     )
     data = await _gemini_json(instr)
     if data:
@@ -220,6 +222,7 @@ async def _refine_brand_assets(feedback: str, current: dict, brand_name: str, as
             "business_context": (data.get("business_context") or "").strip(),
             "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
             "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
+            "greeting": (data.get("greeting") or "").strip(),
         }
     await log_error("server", "Brand prompt refine failed", brand_name, "error")
     return {}
@@ -955,6 +958,7 @@ async def refine_brand_prompts(request: Request):
             "business_context": body.get("business_context") or "",
             "outbound_prompt": body.get("outbound_prompt") or "",
             "inbound_prompt": body.get("inbound_prompt") or "",
+            "greeting": body.get("greeting") or "",
         },
         (body.get("name") or "").strip(),
         (body.get("assistant_name") or "").strip(),
@@ -988,6 +992,7 @@ async def new_brand(request: Request):
         booking_config=_as_json_text(body.get("booking_config"), "{}"),
         voice=body.get("voice") or None,
         model=body.get("model") or None,
+        greeting=body.get("greeting") or None,
         is_default=bool(body.get("is_default", False)),
     )
     return {"id": bid, "status": "created"}
@@ -998,7 +1003,7 @@ async def edit_brand(brand_id: str, request: Request):
     body = await request.json()
     updates: dict = {}
     for field in ("name", "assistant_name", "outbound_prompt", "inbound_prompt",
-                  "business_context", "voice", "model"):
+                  "business_context", "voice", "model", "greeting"):
         if field in body:
             updates[field] = body[field]
     if "inbound_numbers" in body:
