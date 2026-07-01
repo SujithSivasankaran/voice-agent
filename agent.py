@@ -544,48 +544,8 @@ async def entrypoint(ctx: agents.JobContext):
             "the call flow."
         )
 
-    # ── Dial out before starting Gemini ───────────────────────────────────────
-    sip_already_present = any(
-        _is_sip_participant(p) for p in ctx.room.remote_participants.values()
-    )
-
-    if phone_number and not sip_already_present and not is_inbound:
-        if not trunk_id:
-            await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
-            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured", brand.get("id"))
-            await ctx.room.disconnect()
-            return
-        else:
-            logger.info("Dialling %s via trunk %s …", phone_number, trunk_id)
-            try:
-                await ctx.api.sip.create_sip_participant(
-                    api.CreateSIPParticipantRequest(
-                        room_name=ctx.room.name,
-                        sip_trunk_id=trunk_id,
-                        sip_call_to=phone_number,
-                        participant_identity=f"sip_{phone_number}",
-                        participant_name=lead_name,
-                        wait_until_answered=True,
-                    )
-                )
-                logger.info("Call answered by %s", phone_number)
-            except Exception as exc:
-                await _log("error", f"SIP dial failed: {exc}", str(exc))
-                outcome, reason = _sip_failure_outcome(exc)
-                await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}", brand.get("id"))
-                await ctx.room.disconnect()
-                return
-    else:
-        logger.info("SIP participant already present — skipping dial-out")
-
-    # Avoid Gemini charges for ringing, busy, and no-answer time. The realtime
-    # model connection is created only after wait_until_answered succeeds.
-    if call_ended.is_set():
-        await _log("info", f"Call ended before AI session started — phone={phone_number}")
-        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started", brand.get("id"))
-        await ctx.room.disconnect()
-        return
-
+    # ── Build the agent session (before dialing, so its model connection can be
+    #    warmed during the ring) ────────────────────────────────────────────────
     # Brand voice/model take precedence over the agent profile; fall back to env.
     session_model = brand.get("model") or profile_model
     session_voice = brand.get("voice") or profile_voice
@@ -612,8 +572,8 @@ async def entrypoint(ctx: agents.JobContext):
         metrics.log_metrics(event.metrics)
         usage_collector.collect(event.metrics)
 
-    try:
-        await session.start(
+    def _start_session():
+        return session.start(
             agent=agent,
             room=ctx.room,
             room_input_options=RoomInputOptions(
@@ -621,21 +581,114 @@ async def entrypoint(ctx: agents.JobContext):
             ),
         )
 
-        # Speak the opening greeting once on pickup, via the session's attached TTS
-        # (Deepgram by default — fast first audio). Only INBOUND uses a separate scripted
-        # opener; outbound lets the model greet itself per its script (no separate greet,
-        # no double-introduction). build_greeting uses the brand's own `greeting` field
-        # when set, else a sensible inbound default. The prompt NOTE added above (inbound
-        # only) stops the model from greeting again.
-        greeting = build_greeting(lead_name, brand, is_inbound) if is_inbound else None
-        if greeting:
+    # For outbound this holds the connection warm-up running during the ring; None
+    # for inbound / already-present SIP (started inline once the call is up).
+    warm_task: Optional[asyncio.Task] = None
+
+    async def _cleanup_started_session():
+        """Tear down a session that may have been warmed/started, on an early exit."""
+        if warm_task is not None:
+            warm_task.cancel()
             try:
-                # Let the short opener play through cleanly. allow_interruptions=False
-                # stops just-answered line noise / the callee's "hello" from chopping or
-                # garbling it (especially with an aggressive VAD_SILENCE_MS).
-                await session.say(greeting, allow_interruptions=False)
+                await warm_task
+            except BaseException:
+                pass
+        try:
+            await session.aclose()
+        except Exception:
+            pass
+
+    # ── Dial out, warming the model connection during the ring ─────────────────
+    sip_already_present = any(
+        _is_sip_participant(p) for p in ctx.room.remote_participants.values()
+    )
+
+    if phone_number and not sip_already_present and not is_inbound:
+        if not trunk_id:
+            await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
+            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured", brand.get("id"))
+            await _cleanup_started_session()
+            await ctx.room.disconnect()
+            return
+        # Establish the Gemini connection + system-prompt prefill NOW, concurrently
+        # with the ring, so the model is warm the instant the callee answers and the
+        # opener is near-instant — instead of paying the whole cold start in-band
+        # (which was the slow first response, every turn after it fast). Trade-off:
+        # busy/no-answer calls incur the model's setup cost; accepted for outbound
+        # responsiveness. The warm-up is torn down on any early exit below.
+        warm_task = asyncio.create_task(_start_session())
+        logger.info("Dialling %s via trunk %s … (warming model during ring)", phone_number, trunk_id)
+        try:
+            await ctx.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=ctx.room.name,
+                    sip_trunk_id=trunk_id,
+                    sip_call_to=phone_number,
+                    participant_identity=f"sip_{phone_number}",
+                    participant_name=lead_name,
+                    wait_until_answered=True,
+                )
+            )
+            logger.info("Call answered by %s", phone_number)
+        except Exception as exc:
+            await _log("error", f"SIP dial failed: {exc}", str(exc))
+            outcome, reason = _sip_failure_outcome(exc)
+            await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}", brand.get("id"))
+            await _cleanup_started_session()
+            await ctx.room.disconnect()
+            return
+    else:
+        logger.info("SIP participant already present — skipping dial-out")
+
+    # If the callee hung up as/just after they answered, stop before proceeding.
+    if call_ended.is_set():
+        await _log("info", f"Call ended before AI session started — phone={phone_number}")
+        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started", brand.get("id"))
+        await _cleanup_started_session()
+        await ctx.room.disconnect()
+        return
+
+    try:
+        # Ensure the session is live. Outbound warmed it during the ring (await the
+        # task — usually already done); inbound / already-present SIP start it now.
+        if warm_task is not None:
+            await warm_task
+        else:
+            await _start_session()
+
+        # Open the call the moment it connects. The two directions warm up differently:
+        if is_inbound:
+            # INBOUND: play a scripted opener instantly via the session's attached TTS
+            # (Deepgram ~200 ms first audio) so the caller hears us the instant they're
+            # connected. build_greeting uses the brand's own `greeting` field when set,
+            # else a sensible inbound default. The prompt NOTE added above stops the
+            # model from greeting again. allow_interruptions=False lets the short opener
+            # play cleanly over just-answered line noise / the caller's "hello".
+            greeting = build_greeting(lead_name, brand, is_inbound)
+            if greeting:
+                try:
+                    await session.say(greeting, allow_interruptions=False)
+                except Exception as exc:
+                    logger.warning("Greeting via say() failed (%s) — agent will greet reactively", exc)
+        else:
+            # OUTBOUND: don't wait for the callee to speak. The model connection was
+            # already warmed during the ring (above), so this opening turn is generated
+            # near-instantly instead of paying the cold start in-band after the callee's
+            # first reply (which was the slow first response, every turn after it fast).
+            # Proactively generating the opener also makes the agent open the call itself
+            # per its script. Not awaited, so the opener plays while we wait on the call;
+            # generate_reply() returns a handle synchronously (not a coroutine), so
+            # calling it without await is correct.
+            try:
+                session.generate_reply(
+                    instructions=(
+                        "The call has just connected. Speak first, right now — do not wait "
+                        "for them. Greet the person and confirm you are speaking with the "
+                        "right person in one short, natural sentence, per your script."
+                    )
+                )
             except Exception as exc:
-                logger.warning("Greeting via say() failed (%s) — agent will greet reactively", exc)
+                logger.warning("Proactive opening via generate_reply failed (%s) — agent will open reactively", exc)
 
         # SIP hang-up is the normal stop signal. This post-answer limit is only
         # a final guard against abandoned jobs.
