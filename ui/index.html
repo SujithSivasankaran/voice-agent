@@ -758,7 +758,7 @@
     <div class="fsec">
       <div class="fsec-h"><span class="t">🏷️ Identity</span><span class="h">name, assistant &amp; voice</span></div>
       <div class="form-grid">
-        <div class="form-group"><label>Brand Name *</label><input id="br-name" maxlength="80" placeholder="Harry's Fitcamp" /></div>
+        <div class="form-group"><label>Brand Name *</label><input id="br-name" maxlength="80" placeholder="Your business name" /></div>
         <div class="form-group"><label>Assistant Name</label><input id="br-assistant" maxlength="40" placeholder="Tina" /></div>
         <div class="form-group"><label>Voice (optional)</label>
           <select id="br-voice">
@@ -814,8 +814,8 @@
         </div>
       </div>
       <div class="form-group">
-        <label>Greeting <span style="text-transform:none;font-weight:400;color:var(--muted)">(spoken first, the instant the call connects — blank uses the default)</span></label>
-        <input id="br-greeting" maxlength="300" placeholder="e.g. Hi, am I speaking with {lead_name}?   ·   tokens: {lead_name}, {assistant_name}, {brand_name}" />
+        <label>Greeting <span style="text-transform:none;font-weight:400;color:var(--muted)">(inbound only — spoken first, the instant an incoming call connects; blank uses the default. Outbound calls open with the prompt's own script, not this line.)</span></label>
+        <input id="br-greeting" maxlength="300" placeholder="e.g. Hi, this is {assistant_name} from {brand_name}. How can I help?   ·   tokens: {lead_name}, {assistant_name}, {brand_name}" />
       </div>
       <div class="form-group">
         <label>Outbound Prompt <span style="text-transform:none;font-weight:400;color:var(--muted)">(general outgoing calls — blank uses the default)</span></label>
@@ -870,7 +870,7 @@
         </div>
         <div class="form-group" style="margin-top:12px">
           <label>Locations / branches (comma-separated; blank if a single place)</label>
-          <input id="br-locations" placeholder="ADAYAR, ECR" />
+          <input id="br-locations" placeholder="e.g. Downtown, Uptown (leave blank if not location-based)" />
         </div>
         <div class="form-group" style="margin-top:12px">
           <label>Services (name + minutes) — leave empty for a single default service</label>

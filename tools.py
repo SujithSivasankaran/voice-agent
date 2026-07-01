@@ -38,7 +38,7 @@ class AppointmentTools(llm.ToolContext):
         self.phone_number = phone_number
         self.lead_name = lead_name
         # Brand context: which business this call belongs to, and that brand's
-        # booking rules (locations / slot times / duration). Empty → Harry's defaults.
+        # booking rules (locations / slot times / duration). Empty → unconstrained defaults.
         self.booking_config = booking_config or {}
         self._brand_id = brand_id
         self._call_start_time = time.time()
@@ -342,7 +342,7 @@ class AppointmentTools(llm.ToolContext):
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:
         """
-        Connect the caller with the Harry's Fitcamp team via SIP REFER.
+        Connect the caller with the brand's team via SIP REFER.
         Use when the caller requests the team, is angry, or has a complex issue.
         reason: why you're transferring
         """

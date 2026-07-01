@@ -136,7 +136,7 @@ async def _save_early_call(
 def _parse_brand(brand: Optional[dict]) -> dict:
     """Return a brand dict with booking_config parsed into a dict under
     'booking_config_parsed'. Accepts None and returns an empty brand, which makes
-    prompts.py/booking fall back to the built-in Harry's defaults."""
+    prompts.py/booking fall back to the neutral generic defaults."""
     brand = dict(brand or {})
     raw = brand.get("booking_config")
     cfg: dict = {}
@@ -448,7 +448,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     # ── Resolve brand ─────────────────────────────────────────────────────────
     # Outbound carries brand_id in metadata; inbound is refined below once we know
-    # the dialed number. Falls back to the default brand (Harry's) either way.
+    # the dialed number. Falls back to the default brand either way.
     brand = await _resolve_brand(meta)
 
     # ── Connect to LiveKit room ───────────────────────────────────────────────
@@ -522,23 +522,27 @@ async def entrypoint(ctx: agents.JobContext):
             campaign_catalog = "\n".join(hints)
         except Exception as exc:
             logger.warning("Could not load active campaigns for inbound: %s", exc)
-        system_prompt = build_inbound_prompt(lead_name, brand, campaign_catalog)
+        # phone_number was resolved from the caller's SIP attributes above.
+        system_prompt = build_inbound_prompt(lead_name, brand, campaign_catalog, caller_phone=phone_number)
     else:
         # Campaign/call-specific script wins; otherwise the brand's outbound
-        # prompt (and finally the built-in compact default) is used.
-        system_prompt = build_prompt(lead_name, brand, custom_prompt)
+        # prompt (and finally the neutral generic default) is used. phone_number is
+        # the number we're dialing.
+        system_prompt = build_prompt(lead_name, brand, custom_prompt, caller_phone=phone_number)
 
-    # Both directions speak the opening greeting aloud (Deepgram) on pickup, so tell the
-    # model — regardless of its script (default, generic, or a brand's own custom prompt) —
-    # that the greeting already happened. Applying this at runtime (not relying on the
-    # prompt template) guarantees no double-introduction even for brand-supplied prompts
-    # that omit the built-in "greeting already spoken" line.
-    system_prompt += (
-        "\n\nNOTE: The call has just connected and your opening greeting has ALREADY been "
-        "spoken aloud to the caller. Do NOT greet again, re-introduce yourself, say hello, "
-        "or repeat your opening line. Respond directly to the caller's reply and continue "
-        "the call flow (for outbound, handle their answer to who you're speaking with)."
-    )
+    # Only INBOUND speaks a separate scripted greeting aloud (Deepgram) on pickup, so tell
+    # the model — regardless of its script (default, generic, or a brand's own custom
+    # prompt) — that the greeting already happened. Applying this at runtime (not relying on
+    # the prompt template) guarantees no double-introduction even for brand-supplied prompts
+    # that omit the built-in "greeting already spoken" line. Outbound has no separate greet:
+    # the model opens the call itself per its script.
+    if is_inbound:
+        system_prompt += (
+            "\n\nNOTE: The call has just connected and your opening greeting has ALREADY been "
+            "spoken aloud to the caller. Do NOT greet again, re-introduce yourself, say hello, "
+            "or repeat your opening line. Respond directly to the caller's reply and continue "
+            "the call flow."
+        )
 
     # ── Dial out before starting Gemini ───────────────────────────────────────
     sip_already_present = any(
@@ -618,10 +622,12 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
         # Speak the opening greeting once on pickup, via the session's attached TTS
-        # (Deepgram by default — fast first audio). build_greeting uses the brand's own
-        # `greeting` field when set, else a sensible per-direction default. The prompt
-        # NOTE added above stops the model from greeting again (no double-introduction).
-        greeting = build_greeting(lead_name, brand, is_inbound)
+        # (Deepgram by default — fast first audio). Only INBOUND uses a separate scripted
+        # opener; outbound lets the model greet itself per its script (no separate greet,
+        # no double-introduction). build_greeting uses the brand's own `greeting` field
+        # when set, else a sensible inbound default. The prompt NOTE added above (inbound
+        # only) stops the model from greeting again.
+        greeting = build_greeting(lead_name, brand, is_inbound) if is_inbound else None
         if greeting:
             try:
                 # Let the short opener play through cleanly. allow_interruptions=False

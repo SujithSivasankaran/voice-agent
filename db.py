@@ -197,15 +197,10 @@ async def clear_errors() -> None:
 
 # ── Appointments ──────────────────────────────────────────────────────────────
 
-# Default (Harry's Fitcamp) booking rules. A brand with no booking_config of its
-# own falls back to these, so the seeded default brand behaves exactly as before.
-TRIAL_LOCATIONS = ("ADAYAR", "ECR")
-TRIAL_SLOT_TIMES = (
-    "06:00", "07:00", "08:00", "09:00",
-    "16:30", "17:30", "18:30", "19:30",
-)
+# Generic booking default: 60-minute appointments. The agent has no built-in
+# business, so there are no hardcoded locations, fixed slot times, or closed days —
+# every brand supplies its own booking_config; anything it omits is unconstrained.
 DEFAULT_TRIAL_DURATION_MINUTES = 60
-DEFAULT_TRIAL_OFF_DAYS = (6,)  # weekday ints (Mon=0 … Sun=6); Sunday closed
 
 
 class TrialSlotUnavailable(Exception):
@@ -215,26 +210,13 @@ class TrialSlotUnavailable(Exception):
 def resolve_booking_config(config: Optional[dict]) -> dict:
     """Normalise a brand's booking_config.
 
-    config=None means the legacy / no-brand path → fall back to the full Harry's
-    defaults (locations, slot times, off-days). A dict (even {}) is used as-is:
-    a missing field means that dimension is unconstrained — no locations (book
-    without one), no fixed slot times (any time), and no closed days.
-    Returns locations (UPPER), slot_times, duration, off_days.
+    config=None (the legacy / no-brand path) is treated like an empty config: every
+    dimension is unconstrained — no locations (book without one), no fixed slot times
+    (any time), and no closed days. A dict (even {}) behaves the same way.
+    Returns locations (UPPER), slot_times, duration, off_days, and the rest.
     """
     if config is None:
-        return {
-            "locations": TRIAL_LOCATIONS,
-            "slot_times": TRIAL_SLOT_TIMES,
-            "duration_minutes": DEFAULT_TRIAL_DURATION_MINUTES,
-            "off_days": DEFAULT_TRIAL_OFF_DAYS,
-            "slot_mode": "fixed",
-            "open_hours": {},
-            "slot_interval_minutes": 30,
-            "align_start_to_grid": True,
-            "services": [],
-            "resources": (),
-            "capacity_per_slot": 1,
-        }
+        config = {}
     locations = tuple(
         str(loc).strip().upper()
         for loc in (config.get("locations") or [])

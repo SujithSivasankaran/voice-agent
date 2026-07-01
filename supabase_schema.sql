@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS trials (
     phone TEXT NOT NULL,
     date TEXT NOT NULL,
     time TEXT NOT NULL,
-    location TEXT NOT NULL CHECK (location IN ('ADAYAR', 'ECR')),
-    duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes = 60),
+    location TEXT,
+    duration_minutes INTEGER NOT NULL DEFAULT 60,
     status TEXT NOT NULL DEFAULT 'booked' CHECK (status IN ('booked', 'cancelled')),
     created_at TEXT NOT NULL
 );
@@ -118,8 +118,8 @@ ALTER TABLE agent_profiles DISABLE ROW LEVEL SECURITY;
 -- ═══════════════════════════════════════════════════════
 -- Brands (multi-tenant). Each brand is a separate business with its own
 -- prompts, facts, booking setup, identity, and inbound phone numbers (DIDs).
--- A brand row with NULL prompt fields falls back to the built-in Harry's
--- prompts in prompts.py, so the seeded default brand behaves exactly as before.
+-- A brand row with NULL prompt fields falls back to the neutral generic
+-- prompts in prompts.py, so a half-configured brand never impersonates another.
 -- ═══════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS brands (
     id TEXT PRIMARY KEY,
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS brands (
     inbound_numbers TEXT DEFAULT '[]',  -- JSON array of E.164 DIDs that route here
     outbound_prompt TEXT,               -- default script for general outbound calls
     inbound_prompt TEXT,                -- front-desk script for incoming calls
-    business_context TEXT,              -- authoritative facts (replaces DEFAULT_BUSINESS_CONTEXT)
+    business_context TEXT,              -- authoritative facts for this brand (blank => no facts block)
     booking_config TEXT DEFAULT '{}',   -- JSON: locations, slot_times, duration_minutes, off_days, pricing_text, transfer_number
     voice TEXT,                         -- optional Gemini voice override
     model TEXT,                         -- optional model override
@@ -144,8 +144,8 @@ ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS brand_id TEXT;
 ALTER TABLE trials    ADD COLUMN IF NOT EXISTS brand_id TEXT;
 
 -- Multi-brand booking: a location/time may now exist once PER BRAND. Drop the
--- old global slot index and the Harry's-only CHECK constraints so each brand
--- can define its own locations and trial duration.
+-- old global slot index and the legacy single-tenant CHECK constraints so each
+-- brand can define its own locations and booking duration.
 ALTER TABLE trials DROP CONSTRAINT IF EXISTS trials_location_check;
 ALTER TABLE trials DROP CONSTRAINT IF EXISTS trials_duration_minutes_check;
 
@@ -161,13 +161,12 @@ DROP INDEX IF EXISTS idx_trials_booked_slot;
 CREATE INDEX IF NOT EXISTS idx_trials_brand_date
 ON trials (brand_id, date) WHERE status = 'booked';
 
--- Seed Harry's Fitcamp as the default brand. NULL prompt fields => the
--- built-in prompts.py content is used, so nothing changes for Harry's.
--- After running, set this brand's inbound_numbers to the real Harry's DID
--- (via the Brands page or an UPDATE) so inbound routing matches it.
+-- Seed a neutral placeholder default brand so inbound routing and history
+-- backfill have a brand to attach to. NULL prompt fields => the neutral generic
+-- prompts.py content is used. Edit this brand on the Brands page to set its name,
+-- assistant, prompts, facts, booking rules, and inbound DIDs for your business.
 INSERT INTO brands (id, name, assistant_name, inbound_numbers, booking_config, is_default, created_at)
-SELECT gen_random_uuid()::text, 'Harry''s Fitcamp', 'Tina', '[]',
-       '{"locations":["ADAYAR","ECR"],"slot_times":["06:00","07:00","08:00","09:00","16:30","17:30","18:30","19:30"],"duration_minutes":60,"off_days":[6],"pricing_text":"3 months ₹35,000; 6 months ₹60,000; 1 year ₹80,000"}',
+SELECT gen_random_uuid()::text, 'My Business', 'Tina', '[]', '{}',
        1, now()::text
 WHERE NOT EXISTS (SELECT 1 FROM brands);
 

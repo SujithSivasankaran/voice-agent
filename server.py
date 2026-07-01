@@ -163,9 +163,9 @@ async def _generate_campaign_assets(name: str, purpose: str, feedback_items: lis
     api_key = os.environ.get("GOOGLE_API_KEY", "")
     if not api_key or not purpose:
         return None, None
-    from prompts import CAMPAIGN_GEN_INSTRUCTIONS, DEFAULT_SYSTEM_PROMPT
+    from prompts import CAMPAIGN_GEN_INSTRUCTIONS, GENERIC_OUTBOUND_PROMPT
     fb = "\n".join(f"- {f.get('text','')}" for f in (feedback_items or [])) or "(none yet)"
-    base = (default_base or DEFAULT_SYSTEM_PROMPT)[:2200]
+    base = (default_base or GENERIC_OUTBOUND_PROMPT)[:2200]
     instr = CAMPAIGN_GEN_INSTRUCTIONS.format(
         default_base=base, name=name, purpose=purpose, feedback=fb,
     )
@@ -241,7 +241,7 @@ async def _regenerate_campaign(campaign_id: str, pending_status: str = "generati
         except Exception:
             feedback = []
     # Use the campaign's brand outbound script as the style reference, so
-    # generated scripts match that brand rather than the global Harry's default.
+    # generated scripts match that brand rather than the neutral generic default.
     brand_base = None
     if c.get("brand_id"):
         try:
@@ -897,24 +897,16 @@ def _as_json_text(value, default: str) -> str:
 @app.get("/brand-defaults")
 async def brand_defaults():
     """The effective fallback prompt content, so the Brands editor can pre-fill
-    empty fields. The default brand falls back to Harry's built-in content; a
-    non-default brand falls back to the neutral generic content."""
-    from prompts import (
-        COMPACT_OUTBOUND_SYSTEM_PROMPT, INBOUND_SYSTEM_PROMPT, DEFAULT_BUSINESS_CONTEXT,
-        GENERIC_OUTBOUND_PROMPT, GENERIC_INBOUND_PROMPT,
-    )
-    return {
-        "builtin": {
-            "outbound_prompt": COMPACT_OUTBOUND_SYSTEM_PROMPT,
-            "inbound_prompt": INBOUND_SYSTEM_PROMPT,
-            "business_context": DEFAULT_BUSINESS_CONTEXT,
-        },
-        "generic": {
-            "outbound_prompt": GENERIC_OUTBOUND_PROMPT,
-            "inbound_prompt": GENERIC_INBOUND_PROMPT,
-            "business_context": "",
-        },
+    empty fields. Every brand falls back to the same neutral generic content — the
+    agent has no built-in business of its own. The `builtin` key is kept for
+    backwards compatibility with the editor and mirrors `generic`."""
+    from prompts import GENERIC_OUTBOUND_PROMPT, GENERIC_INBOUND_PROMPT
+    generic = {
+        "outbound_prompt": GENERIC_OUTBOUND_PROMPT,
+        "inbound_prompt": GENERIC_INBOUND_PROMPT,
+        "business_context": "",
     }
+    return {"builtin": generic, "generic": generic}
 
 
 @app.get("/brands")
