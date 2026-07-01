@@ -8,12 +8,15 @@ Single source of truth for configuration: VPS environment variables.
 """
 
 import asyncio
+import logging
 import os
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger("outbound-db")
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -127,6 +130,24 @@ async def set_setting(key: str, value: str) -> None:
         {"key": key, "value": value, "updated_at": _now_iso()},
         on_conflict="key",
     ).execute()
+
+
+async def get_stored_setting(key: str, default: str = "") -> str:
+    """Read a value straight from the Supabase settings table (NOT env vars).
+
+    Unlike get_setting(), which is env-only, this reads persisted values — used for
+    auth material (admin password hash, session secret) that the operator can rotate
+    from the dashboard without redeploying.
+    """
+    try:
+        db = await _adb()
+        result = await db.table("settings").select("value").eq("key", key).limit(1).execute()
+        rows = result.data or []
+        if rows and rows[0].get("value"):
+            return rows[0]["value"]
+    except Exception as exc:
+        logger.warning("get_stored_setting(%s) failed: %s", key, exc)
+    return default
 
 
 async def save_settings(data: dict) -> None:

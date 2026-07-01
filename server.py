@@ -41,19 +41,53 @@ from db import (
 )
 from observability import langfuse_status
 from recordings import presigned_recording_url, recording_sync_status, sync_vobiz_recordings
+import auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-server")
 
 app = FastAPI(title="T-800", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The dashboard is served same-origin, so it needs NO CORS. Only add cross-origin
+# access if ALLOWED_ORIGINS is explicitly set (comma-separated). We never combine a
+# wildcard origin with credentials — browsers reject it and it defeats the purpose.
+_allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# ── Authentication gate ───────────────────────────────────────────────────────
+# Everything is behind the session cookie except this small public allowlist:
+# the login endpoints, logout, health check, and the favicon.
+PUBLIC_PATHS = {"/login", "/logout", "/health", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    # CORS preflight and explicitly-public routes bypass the gate.
+    if request.method == "OPTIONS" or path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    token = request.cookies.get(auth.SESSION_COOKIE_NAME, "")
+    user = auth.verify_session_token(token)
+    if user:
+        request.state.user = user
+        return await call_next(request)
+
+    # Unauthenticated: send browsers to the login page, APIs a 401 they can handle.
+    accept = request.headers.get("accept", "")
+    wants_html = request.method == "GET" and "text/html" in accept
+    if wants_html:
+        return RedirectResponse(url="/login", status_code=302)
+    return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
 
 # ── APScheduler ───────────────────────────────────────────────────────────────
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -397,6 +431,10 @@ def _schedule_campaign(campaign: dict) -> None:
 @app.on_event("startup")
 async def startup():
     init_db()
+    try:
+        await auth.init_auth()
+    except Exception as exc:
+        logger.error("Auth initialisation failed: %s", exc)
     scheduler.start()
     try:
         sync_seconds = max(30, int(os.environ.get("RECORDING_SYNC_SECONDS", "60")))
@@ -425,6 +463,84 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     scheduler.shutdown(wait=False)
+
+
+# ── Authentication routes ─────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    # Already signed in? Skip the form.
+    if auth.verify_session_token(request.cookies.get(auth.SESSION_COOKIE_NAME, "")):
+        return RedirectResponse(url="/", status_code=302)
+    login_path = Path(__file__).parent / "ui" / "login.html"
+    if login_path.exists():
+        return HTMLResponse(login_path.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Login</h1><p>ui/login.html not found</p>", status_code=500)
+
+
+@app.post("/login")
+async def login(request: Request):
+    ip = auth.client_ip(request)
+    if auth.is_rate_limited(ip):
+        raise HTTPException(429, f"Too many attempts. Try again in {auth.retry_after_seconds(ip)}s.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not await auth.verify_credentials(username, password):
+        auth.record_failure(ip)
+        logger.warning("Failed login for '%s' from %s", username, ip)
+        raise HTTPException(401, "Invalid username or password")
+    auth.reset_failures(ip)
+    token = auth.create_session_token(username)
+    response = JSONResponse({"ok": True})
+    auth.set_session_cookie(response, token)
+    return response
+
+
+@app.post("/logout")
+async def logout_post():
+    response = JSONResponse({"ok": True})
+    auth.clear_session_cookie(response)
+    return response
+
+
+@app.get("/logout")
+async def logout_get():
+    response = RedirectResponse(url="/login", status_code=302)
+    auth.clear_session_cookie(response)
+    return response
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request):
+    return {"username": getattr(request.state, "user", None)}
+
+
+@app.post("/auth/change-password")
+async def change_password(request: Request):
+    if auth.is_password_env_managed():
+        raise HTTPException(
+            409,
+            "Password is managed via the ADMIN_PASSWORD environment variable. "
+            "Change it there and redeploy.",
+        )
+    body = await request.json()
+    current = body.get("current_password") or ""
+    new = body.get("new_password") or ""
+    if len(new) < 10:
+        raise HTTPException(400, "New password must be at least 10 characters")
+    username = getattr(request.state, "user", "") or await auth.get_admin_username()
+    if not await auth.verify_credentials(username, current):
+        raise HTTPException(401, "Current password is incorrect")
+    await auth.set_admin_password(new)
+    logger.info("Admin password changed")
+    # Rotate the session so the current browser stays signed in with a fresh cookie.
+    response = JSONResponse({"ok": True})
+    auth.set_session_cookie(response, auth.create_session_token(username))
+    return response
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────

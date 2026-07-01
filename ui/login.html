@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Sign in · T-800</title>
+  <style>
+    :root {
+      --bg: #0b0e14; --panel: #141922; --border: #232a36;
+      --text: #e6eaf0; --muted: #8b95a5; --accent: #4f8cff; --danger: #ff5c5c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(1200px 600px at 50% -10%, #16202e 0%, var(--bg) 60%);
+      color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+    }
+    .card {
+      width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 32px 28px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+    .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    .brand h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .6px; }
+    input {
+      width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border);
+      background: #0d121a; color: var(--text); font-size: 15px; outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%; margin-top: 22px; padding: 12px; border: 0; border-radius: 9px;
+      background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .err { margin-top: 16px; color: var(--danger); font-size: 13px; min-height: 16px; }
+    .foot { margin-top: 18px; color: var(--muted); font-size: 11px; text-align: center; }
+  </style>
+</head>
+<body>
+  <form class="card" id="form" autocomplete="on">
+    <div class="brand"><span class="dot"></span><h1>T-800 · Admin</h1></div>
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" autofocus required />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <button id="submit" type="submit">Sign in</button>
+    <div class="err" id="err"></div>
+    <div class="foot">Authorised access only.</div>
+  </form>
+  <script>
+    const form = document.getElementById('form');
+    const btn = document.getElementById('submit');
+    const err = document.getElementById('err');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      try {
+        const r = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (r.ok) {
+          window.location.href = '/';
+          return;
+        }
+        let msg = 'Sign in failed';
+        try { const d = await r.json(); if (d.detail) msg = d.detail; } catch {}
+        err.textContent = msg;
+      } catch {
+        err.textContent = 'Network error. Please try again.';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>
