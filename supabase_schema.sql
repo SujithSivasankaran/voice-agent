@@ -1,5 +1,11 @@
 -- ═══════════════════════════════════════════════════════
 -- T-800 — Complete Database Schema
+--
+-- NOTE: Schema is now managed by versioned migrations in migrations/ applied by
+-- migrate.py (run automatically on deploy when DATABASE_URL is set). This file is
+-- kept as a convenience for a manual, one-shot provision of a fresh database and
+-- mirrors migrations 0001–0003. For any NEW schema change, add a numbered file in
+-- migrations/ rather than editing this file. See UPGRADE.md.
 -- ═══════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS appointments (
@@ -174,3 +180,41 @@ WHERE NOT EXISTS (SELECT 1 FROM brands);
 UPDATE call_logs SET brand_id = (SELECT id FROM brands WHERE is_default = 1 LIMIT 1) WHERE brand_id IS NULL;
 UPDATE campaigns SET brand_id = (SELECT id FROM brands WHERE is_default = 1 LIMIT 1) WHERE brand_id IS NULL;
 UPDATE trials    SET brand_id = (SELECT id FROM brands WHERE is_default = 1 LIMIT 1) WHERE brand_id IS NULL;
+
+-- ═══════════════════════════════════════════════════════
+-- 0002 — Do-Not-Call suppression list
+-- ═══════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS dnc_list (
+    id TEXT PRIMARY KEY,
+    phone_number TEXT NOT NULL,
+    brand_id TEXT,                 -- NULL => global suppression across all brands
+    reason TEXT,
+    source TEXT,
+    created_at TEXT NOT NULL
+);
+ALTER TABLE dnc_list DISABLE ROW LEVEL SECURITY;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dnc_global
+ON dnc_list (phone_number) WHERE brand_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dnc_brand
+ON dnc_list (phone_number, brand_id) WHERE brand_id IS NOT NULL;
+
+-- ═══════════════════════════════════════════════════════
+-- 0003 — Per-contact campaign state (resumable, idempotent campaigns)
+-- ═══════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS campaign_contacts (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    phone_number TEXT NOT NULL,
+    lead_name TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',  -- queued|dialing|done|failed|skipped
+    outcome TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    skip_reason TEXT,
+    created_at TEXT NOT NULL
+);
+ALTER TABLE campaign_contacts DISABLE ROW LEVEL SECURITY;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_contact_unique
+ON campaign_contacts (campaign_id, phone_number);
+CREATE INDEX IF NOT EXISTS idx_campaign_contacts_pending
+ON campaign_contacts (campaign_id, status);

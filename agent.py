@@ -31,12 +31,10 @@ from livekit import agents, api
 from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
-from db import (
-    init_db, log_call, log_error, get_enabled_tools, get_agent_profile, get_active_campaigns,
-    get_brand, get_default_brand, get_brand_by_number,
-)
-from prompts import build_prompt, build_inbound_prompt, build_greeting
-from tools import AppointmentTools
+from business import DEFAULT_VOICE, INBOUND, campaign_or_default
+from db import init_db, log_call, log_error
+from prompts import OPENING_INSTRUCTION, build_greeting, build_inbound_prompt, build_prompt
+from tools import CallTools
 from observability import record_call_usage, setup_langfuse
 
 logging.basicConfig(level=logging.INFO)
@@ -110,9 +108,9 @@ async def _save_early_call(
     lead_name: str,
     outcome: str,
     reason: str,
-    brand_id: Optional[str] = None,
+    campaign: Optional[str] = None,
 ) -> None:
-    """Persist calls that finish before AppointmentTools exists."""
+    """Persist calls that finish before CallTools exists."""
     for attempt in range(1, 4):
         try:
             await log_call(
@@ -121,7 +119,7 @@ async def _save_early_call(
                 outcome=outcome,
                 reason=reason,
                 duration_seconds=0,
-                brand_id=brand_id,
+                campaign=campaign,
             )
             return
         except Exception as exc:
@@ -129,56 +127,6 @@ async def _save_early_call(
             if attempt < 3:
                 await asyncio.sleep(0.25 * attempt)
     logger.error("Early call logging exhausted all retries: %s", phone or "unknown")
-
-
-# ── Brand resolution ──────────────────────────────────────────────────────────
-
-def _parse_brand(brand: Optional[dict]) -> dict:
-    """Return a brand dict with booking_config parsed into a dict under
-    'booking_config_parsed'. Accepts None and returns an empty brand, which makes
-    prompts.py/booking fall back to the neutral generic defaults."""
-    brand = dict(brand or {})
-    raw = brand.get("booking_config")
-    cfg: dict = {}
-    if isinstance(raw, str) and raw.strip():
-        try:
-            cfg = json.loads(raw)
-        except Exception:
-            cfg = {}
-    elif isinstance(raw, dict):
-        cfg = raw
-    brand["booking_config_parsed"] = cfg if isinstance(cfg, dict) else {}
-    return brand
-
-
-def _dialed_number(participant) -> str:
-    """The brand DID the caller dialed, read from the inbound SIP attributes."""
-    attrs = getattr(participant, "attributes", None) or {}
-    return (attrs.get("sip.trunkPhoneNumber") or attrs.get("sip.to")
-            or attrs.get("sip.toNumber") or attrs.get("sip.dialedNumber") or "")
-
-
-async def _resolve_brand(meta: dict, dialed_number: str = "") -> dict:
-    """Resolve which brand a call belongs to: explicit brand_id wins, then a DID
-    match (inbound), then the default brand. Always returns a parsed brand dict."""
-    brand = None
-    brand_id = meta.get("brand_id")
-    if brand_id:
-        try:
-            brand = await get_brand(brand_id)
-        except Exception as exc:
-            logger.warning("Could not load brand %s: %s", brand_id, exc)
-    if brand is None and dialed_number:
-        try:
-            brand = await get_brand_by_number(dialed_number)
-        except Exception as exc:
-            logger.warning("Brand DID lookup failed for %s: %s", dialed_number, exc)
-    if brand is None:
-        try:
-            brand = await get_default_brand()
-        except Exception as exc:
-            logger.warning("Could not load default brand: %s", exc)
-    return _parse_brand(brand)
 
 
 def _extract_transcript(session) -> str:
@@ -290,8 +238,7 @@ def _build_session(
     """
     Build AgentSession with Gemini Live or pipeline fallback.
 
-    model / voice override the VPS env vars for this specific call only —
-    used by agent profiles without mutating os.environ.
+    model / voice override the VPS env vars for this specific call only.
 
     SILENCE-PREVENTION (all 3 required for Gemini Live):
     1. SessionResumptionConfig(transparent=True) — auto-reconnect on timeout
@@ -404,58 +351,31 @@ async def entrypoint(ctx: agents.JobContext):
     except Exception:
         logger.warning("Could not parse room metadata as JSON")
 
-    phone_number     = meta.get("phone_number", "")
-    lead_name        = meta.get("lead_name", "there")
-    custom_prompt    = meta.get("system_prompt") or meta.get("custom_prompt")
-    agent_profile_id = meta.get("agent_profile_id")
-    trunk_id         = meta.get("trunk_id") or os.environ.get("OUTBOUND_TRUNK_ID", "")
+    phone_number = meta.get("phone_number", "")
+    lead_name    = meta.get("lead_name", "there")
+    missed_date  = meta.get("missed_date", "")
+    trunk_id     = meta.get("trunk_id") or os.environ.get("OUTBOUND_TRUNK_ID", "")
+    # No outbound number means the caller dialled us (routed by a LiveKit dispatch rule).
+    is_inbound   = not phone_number
+    campaign     = INBOUND if is_inbound else campaign_or_default(meta.get("campaign"))
 
     trace_metadata = {
         "langfuse.session.id": ctx.room.name,
         "langfuse.trace.name": "voice-call",
-        "call.direction": "outbound" if phone_number else "inbound",
+        "call.direction": "inbound" if is_inbound else "outbound",
         "call.room": ctx.room.name,
         "campaign.id": str(meta.get("campaign_id") or ""),
-        "campaign.name": str(meta.get("campaign_name") or ""),
-        "brand.id": str(meta.get("brand_id") or ""),
+        "campaign.name": campaign,
     }
     trace_provider = setup_langfuse(trace_metadata)
 
-    await _log("info", f"Call starting — phone={phone_number} lead={lead_name}")
-
-    # ── Load agent profile (no os.environ writes) ─────────────────────────────
-    profile_model: Optional[str] = None
-    profile_voice: Optional[str] = None
-
-    if agent_profile_id:
-        try:
-            profile = await get_agent_profile(agent_profile_id)
-            if profile:
-                profile_model = profile.get("model") or None
-                profile_voice = profile.get("voice") or None
-                if profile.get("system_prompt") and not custom_prompt:
-                    custom_prompt = profile["system_prompt"]
-                if profile.get("enabled_tools"):
-                    import json as _j
-                    try:
-                        pt = _j.loads(profile["enabled_tools"])
-                        if pt:
-                            meta["enabled_tools"] = pt
-                    except Exception:
-                        pass
-        except Exception as exc:
-            logger.warning("Could not load agent profile %s: %s", agent_profile_id, exc)
-
-    # ── Resolve brand ─────────────────────────────────────────────────────────
-    # Outbound carries brand_id in metadata; inbound is refined below once we know
-    # the dialed number. Falls back to the default brand either way.
-    brand = await _resolve_brand(meta)
+    await _log("info", f"Call starting — phone={phone_number} lead={lead_name} campaign={campaign}")
 
     # ── Connect to LiveKit room ───────────────────────────────────────────────
     try:
         await ctx.connect()
     except Exception as exc:
-        await _save_early_call(phone_number, lead_name, "failed", f"room connection failed: {exc}", brand.get("id"))
+        await _save_early_call(phone_number, lead_name, "failed", f"room connection failed: {exc}", campaign)
         logger.exception("Could not connect to LiveKit room")
         return
 
@@ -478,15 +398,12 @@ async def entrypoint(ctx: agents.JobContext):
     def _on_room_disconnected(*_args):
         call_ended.set()
 
-    # ── Inbound call? (no outbound number means the caller dialled us) ─────────
-    # Inbound calls are routed here by a LiveKit dispatch rule; the caller's SIP
-    # participant joins the room instead of us dialing out.
-    is_inbound = not phone_number
+    # ── Inbound: wait for the caller's SIP participant to join ─────────────────
     if is_inbound:
         caller = await _wait_for_sip_participant(ctx, timeout=15)
         if caller is None:
             await _log("warning", "Inbound job had no SIP participant; closing without starting AI")
-            await _save_early_call("unknown", lead_name, "no_answer", "inbound job had no SIP participant", brand.get("id"))
+            await _save_early_call("unknown", lead_name, "no_answer", "inbound job had no SIP participant", campaign)
             await ctx.room.disconnect()
             return
         caller_num = _caller_number(caller)
@@ -494,72 +411,24 @@ async def entrypoint(ctx: agents.JobContext):
             phone_number = caller_num
         if getattr(caller, "name", ""):
             lead_name = caller.name
-        # Log raw SIP attributes once (to Live Logs too) so we can confirm which
-        # key carries the dialed DID for this trunk, then route to the matching brand.
-        attrs = dict(getattr(caller, "attributes", None) or {})
-        logger.info("Inbound SIP attributes: %s", attrs)
-        await _log("info", f"Inbound SIP attributes: {attrs}")
-        dialed = _dialed_number(caller)
-        brand = await _resolve_brand(meta, dialed)
-        await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'} → brand={brand.get('name') or 'default'} (dialed {dialed or 'unknown'})")
+        await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
-    # ── Build system prompt ───────────────────────────────────────────────────
-    # Incoming calls get only a tiny campaign index. Details are fetched on demand
-    # through lookup_campaign, so every turn does not carry every summary. Outgoing calls use the
-    # campaign script passed in via metadata, else the default outreach prompt.
+    # ── System prompt: one fixed script per campaign ──────────────────────────
     if is_inbound:
-        campaign_catalog = ""
-        try:
-            actives = await get_active_campaigns(brand.get("id"))
-            hints = []
-            for campaign in actives:
-                name = " ".join(str(campaign.get("name") or "").split())
-                if not name:
-                    continue
-                summary = " ".join(str(campaign.get("summary") or "").split())
-                gist = summary[:100].rsplit(" ", 1)[0] if len(summary) > 100 else summary
-                hints.append(f"• {name}" + (f" — {gist}" if gist else ""))
-            campaign_catalog = "\n".join(hints)
-        except Exception as exc:
-            logger.warning("Could not load active campaigns for inbound: %s", exc)
-        # phone_number was resolved from the caller's SIP attributes above.
-        system_prompt = build_inbound_prompt(lead_name, brand, campaign_catalog, caller_phone=phone_number)
+        system_prompt = build_inbound_prompt(caller_phone=phone_number)
     else:
-        # Campaign/call-specific script wins; otherwise the brand's outbound
-        # prompt (and finally the neutral generic default) is used. phone_number is
-        # the number we're dialing.
-        system_prompt = build_prompt(lead_name, brand, custom_prompt, caller_phone=phone_number)
-
-    # Only INBOUND speaks a separate scripted greeting aloud (Deepgram) on pickup, so tell
-    # the model — regardless of its script (default, generic, or a brand's own custom
-    # prompt) — that the greeting already happened. Applying this at runtime (not relying on
-    # the prompt template) guarantees no double-introduction even for brand-supplied prompts
-    # that omit the built-in "greeting already spoken" line. Outbound has no separate greet:
-    # the model opens the call itself per its script.
-    if is_inbound:
-        system_prompt += (
-            "\n\nNOTE: The call has just connected and your opening greeting has ALREADY been "
-            "spoken aloud to the caller. Do NOT greet again, re-introduce yourself, say hello, "
-            "or repeat your opening line. Respond directly to the caller's reply and continue "
-            "the call flow."
-        )
+        system_prompt = build_prompt(campaign, lead_name, caller_phone=phone_number, missed_date=missed_date)
 
     # ── Build the agent session (before dialing, so its model connection can be
     #    warmed during the ring) ────────────────────────────────────────────────
-    # Brand voice/model take precedence over the agent profile; fall back to env.
-    session_model = brand.get("model") or profile_model
-    session_voice = brand.get("voice") or profile_voice
+    # Tara's voice is fixed in business.py (it overrides GEMINI_TTS_VOICE, as the brand voice did).
+    session_voice = DEFAULT_VOICE
     try:
-        enabled_tools = meta.get("enabled_tools") or await get_enabled_tools()
-        tools_instance = AppointmentTools(
-            ctx, phone_number, lead_name,
-            booking_config=brand.get("booking_config_parsed"),
-            brand_id=brand.get("id"),
-        )
-        tool_list = tools_instance.build_tool_list(enabled_tools, inbound=is_inbound)
-        session = _build_session(tool_list, system_prompt, model=session_model, voice=session_voice)
+        tools_instance = CallTools(ctx, phone_number, lead_name, campaign=campaign, missed_date=missed_date)
+        tool_list = tools_instance.tool_list()
+        session = _build_session(tool_list, system_prompt, voice=session_voice)
     except Exception as exc:
-        await _save_early_call(phone_number, lead_name, "failed", f"agent setup failed: {exc}", brand.get("id"))
+        await _save_early_call(phone_number, lead_name, "failed", f"agent setup failed: {exc}", campaign)
         logger.exception("Could not build agent session")
         await ctx.room.disconnect()
         return
@@ -606,7 +475,7 @@ async def entrypoint(ctx: agents.JobContext):
     if phone_number and not sip_already_present and not is_inbound:
         if not trunk_id:
             await _log("error", "OUTBOUND_TRUNK_ID not set — cannot dial out")
-            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured", brand.get("id"))
+            await _save_early_call(phone_number, lead_name, "failed", "outbound trunk is not configured", campaign)
             await _cleanup_started_session()
             await ctx.room.disconnect()
             return
@@ -633,7 +502,7 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:
             await _log("error", f"SIP dial failed: {exc}", str(exc))
             outcome, reason = _sip_failure_outcome(exc)
-            await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}", brand.get("id"))
+            await _save_early_call(phone_number, lead_name, outcome, f"SIP dial failed: {reason}", campaign)
             await _cleanup_started_session()
             await ctx.room.disconnect()
             return
@@ -643,7 +512,7 @@ async def entrypoint(ctx: agents.JobContext):
     # If the callee hung up as/just after they answered, stop before proceeding.
     if call_ended.is_set():
         await _log("info", f"Call ended before AI session started — phone={phone_number}")
-        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started", brand.get("id"))
+        await _save_early_call(phone_number, lead_name, "caller_hangup", "call ended before AI session started", campaign)
         await _cleanup_started_session()
         await ctx.room.disconnect()
         return
@@ -660,16 +529,13 @@ async def entrypoint(ctx: agents.JobContext):
         if is_inbound:
             # INBOUND: play a scripted opener instantly via the session's attached TTS
             # (Deepgram ~200 ms first audio) so the caller hears us the instant they're
-            # connected. build_greeting uses the brand's own `greeting` field when set,
-            # else a sensible inbound default. The prompt NOTE added above stops the
-            # model from greeting again. allow_interruptions=False lets the short opener
-            # play cleanly over just-answered line noise / the caller's "hello".
-            greeting = build_greeting(lead_name, brand, is_inbound)
-            if greeting:
-                try:
-                    await session.say(greeting, allow_interruptions=False)
-                except Exception as exc:
-                    logger.warning("Greeting via say() failed (%s) — agent will greet reactively", exc)
+            # connected. The inbound prompt tells the model the greeting was already
+            # spoken, so it never greets twice. allow_interruptions=False lets the short
+            # opener play cleanly over just-answered line noise / the caller's "hello".
+            try:
+                await session.say(build_greeting(), allow_interruptions=False)
+            except Exception as exc:
+                logger.warning("Greeting via say() failed (%s) — agent will greet reactively", exc)
         else:
             # OUTBOUND: don't wait for the callee to speak. The model connection was
             # already warmed during the ring (above), so this opening turn is generated
@@ -680,13 +546,7 @@ async def entrypoint(ctx: agents.JobContext):
             # generate_reply() returns a handle synchronously (not a coroutine), so
             # calling it without await is correct.
             try:
-                session.generate_reply(
-                    instructions=(
-                        "The call has just connected. Speak first, right now — do not wait "
-                        "for them. Greet the person and confirm you are speaking with the "
-                        "right person in one short, natural sentence, per your script."
-                    )
-                )
+                session.generate_reply(instructions=OPENING_INSTRUCTION)
             except Exception as exc:
                 logger.warning("Proactive opening via generate_reply failed (%s) — agent will open reactively", exc)
 
@@ -718,7 +578,7 @@ async def entrypoint(ctx: agents.JobContext):
         # (by end_call during the call, or ensure_call_logged above).
         await tools_instance.attach_transcript(transcript)
         usage_summary = usage_collector.get_summary()
-        model_name = session_model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
         estimated_cost = record_call_usage(
             trace_provider,
             usage_summary,

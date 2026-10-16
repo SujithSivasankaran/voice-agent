@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="robots" content="noindex, nofollow" />
 <meta name="theme-color" content="#0f172a" />
-<title>T-800 · AI Calling</title>
+<title>Harry's Fitcamp · AI Calling</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -230,7 +230,6 @@
   input[type=checkbox], input[type=radio] { width: 16px; height: 16px; min-height: 0; accent-color: var(--primary); box-shadow: none; cursor: pointer; flex-shrink: 0; }
   input[type=date], input[type=time] { min-width: 0; }
   .check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-2); cursor: pointer; }
-  .char-count { font-size: 12px; color: var(--faint); text-align: right; }
 
   /* ── Buttons ───────────────────────────────────────────────────────────── */
   .btn {
@@ -301,6 +300,11 @@
   .badge-callback_requested, .badge-default, .badge-info { background: var(--primary-soft); color: var(--primary-text); }
   .badge-no_answer, .badge-completed, .badge-unknown, .badge-busy { background: var(--neutral-soft); color: var(--muted); }
   .badge.plain::before { display: none; }
+  .badge-trial { background: var(--primary-soft); color: var(--primary-text); }
+  .badge-missed_class, .badge-sick_or_injured, .badge-lost_motivation, .badge-cost { background: var(--warning-soft); color: var(--warning); }
+  .badge-inbound, .badge-earlier { background: var(--neutral-soft); color: var(--muted); }
+  .reason-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .reason-summary .badge b { font-variant-numeric: tabular-nums; margin-left: 2px; }
 
   /* ── Empty states / skeletons ──────────────────────────────────────────── */
   .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
@@ -357,31 +361,16 @@
   .configured-dot.yes { background: var(--success); }
   .configured-dot.no { background: var(--border-strong); }
 
-  /* ── Campaign / profile cards ──────────────────────────────────────────── */
+  /* ── Campaign cards ──────────────────────────────────────────── */
   .camp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; }
   .camp-card { display: flex; flex-direction: column; margin-bottom: 0; }
   .camp-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
   .camp-title { font-weight: 600; font-size: 15px; color: var(--text); word-break: break-word; }
   .camp-brand { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .camp-body { padding: 14px 20px 16px; flex: 1; }
-  .camp-summary { padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--text-2); white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
-  .camp-summary .cap { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; white-space: normal; }
-  .camp-stats { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
-  .camp-stats b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .camp-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
   .spinner { width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .camp-foot { display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
-  .camp-foot input { flex: 1; min-width: 180px; }
-  .camp-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 
-  .profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
-  .profile-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; position: relative; box-shadow: var(--shadow-xs); }
-  .profile-card.default-profile { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
-  .profile-card .profile-name { font-weight: 600; font-size: 15px; margin-bottom: 6px; padding-right: 70px; }
-  .profile-card .profile-meta { color: var(--muted); font-size: 13px; line-height: 1.7; }
-  .profile-card .profile-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .default-badge { position: absolute; top: 16px; right: 16px; }
 
   /* ── Modals ────────────────────────────────────────────────────────────── */
   .modal-overlay { display: none; position: fixed; inset: 0; background: var(--overlay); z-index: 1000; align-items: center; justify-content: center; padding: 24px; }
@@ -399,35 +388,9 @@
   .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; min-height: 0; }
   .modal-footer { display: flex; gap: 10px; justify-content: flex-end; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 16px 16px; flex-wrap: wrap; }
 
-  /* Brand editor bits */
-  .tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 0 24px; overflow-x: auto; scrollbar-width: none; }
-  .tabbar::-webkit-scrollbar { display: none; }
-  .tabbtn { display: inline-flex; align-items: center; gap: 7px; appearance: none; background: none; border: none; padding: 12px 10px; font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; margin-bottom: -1px; }
-  .tabbtn:hover { color: var(--text); }
-  .tabbtn.active { color: var(--primary-text); border-bottom-color: var(--primary); }
-  .tabpane { display: none; }
-  .tabpane.active { display: block; }
-  .hero-note { display: flex; gap: 10px; font-size: 13.5px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; }
-  .hero-note .ico { color: var(--primary-text); margin-top: 1px; }
-  .hero-note strong { color: var(--text); }
-  .panel { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; background: var(--surface-2); }
-  .panel.accent { border-color: color-mix(in srgb, var(--primary) 35%, transparent); background: var(--primary-soft); }
-  .panel .divider { border-top: 1px dashed color-mix(in srgb, var(--primary) 35%, transparent); margin: 14px 0; }
-  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--surface-2); flex-wrap: wrap; }
-  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .chip-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 6px 12px; cursor: pointer; user-select: none; }
-  .chip-row label:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-text); }
   .inline-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .inline-row > input { flex: 1; min-width: 160px; }
-  .dyn-row { display: flex; gap: 8px; margin-bottom: 8px; }
-  .dyn-row input { flex: 1; min-width: 0; }
-  .dyn-row input.svc-dur { flex: 0 0 96px; }
-  details.adv summary { cursor: pointer; font-size: 13px; color: var(--muted); font-weight: 500; }
-  details.adv[open] summary { margin-bottom: 8px; }
-  .status-text { font-size: 13px; color: var(--muted); }
 
-  .tools-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .tool-check { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-family: var(--mono); word-break: break-all; }
 
   /* Transcript / history */
   .transcript-line { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
@@ -489,7 +452,7 @@
     .kpi-card { padding: 14px; }
     .kpi-value { font-size: 22px; }
     .kpi-head .kpi-icon { display: none; }
-    .form-grid, .form-grid.three, .settings-grid, .tools-grid { grid-template-columns: 1fr; }
+    .form-grid, .form-grid.three, .settings-grid { grid-template-columns: 1fr; }
     .card-body { padding: 16px; }
     .card-head, .card-foot { padding: 14px 16px; }
     .setting-row { padding: 12px 16px; flex-wrap: wrap; }
@@ -529,7 +492,6 @@
     .modal-body { padding: 16px; }
     .modal-footer { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-radius: 0; }
     .modal-footer .btn { flex: 1; }
-    .tabbar { padding: 0 12px; }
 
     #toast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); align-items: center; }
     .toast-msg { width: 100%; }
@@ -603,26 +565,25 @@
   <div class="brand">
     <div class="brand-mark"><svg class="ico"><use href="#i-phone"/></svg></div>
     <div class="brand-text">
-      <div class="brand-name">T-800</div>
-      <div class="brand-sub">AI Calling Agent</div>
+      <div class="brand-name">Harry's Fitcamp</div>
+      <div class="brand-sub">AI calling agent</div>
     </div>
   </div>
   <div class="nav-scroll">
     <div class="nav-label">Overview</div>
     <ul>
       <li><a href="#dashboard" class="nav-link active" data-page="dashboard" data-tip="Dashboard"><svg class="ico"><use href="#i-grid"/></svg><span class="txt">Dashboard</span></a></li>
-      <li><a href="#new-call" class="nav-link" data-page="new-call" data-tip="New Call"><svg class="ico"><use href="#i-phone-out"/></svg><span class="txt">New Call</span></a></li>
       <li><a href="#campaigns" class="nav-link" data-page="campaigns" data-tip="Campaigns"><svg class="ico"><use href="#i-megaphone"/></svg><span class="txt">Campaigns</span></a></li>
     </ul>
     <div class="nav-label">Records</div>
     <ul>
-      <li><a href="#appointments" class="nav-link" data-page="appointments" data-tip="Bookings"><svg class="ico"><use href="#i-calendar"/></svg><span class="txt">Bookings</span></a></li>
+      <li><a href="#appointments" class="nav-link" data-page="appointments" data-tip="Trial bookings"><svg class="ico"><use href="#i-calendar"/></svg><span class="txt">Trial bookings</span></a></li>
+      <li><a href="#missed" class="nav-link" data-page="missed" data-tip="Missed classes"><svg class="ico"><use href="#i-calendar-x"/></svg><span class="txt">Missed classes</span></a></li>
       <li><a href="#call-logs" class="nav-link" data-page="call-logs" data-tip="Call Logs"><svg class="ico"><use href="#i-list"/></svg><span class="txt">Call Logs</span></a></li>
       <li><a href="#crm" class="nav-link" data-page="crm" data-tip="Contacts"><svg class="ico"><use href="#i-users"/></svg><span class="txt">Contacts</span></a></li>
     </ul>
     <div class="nav-label">Configure</div>
     <ul>
-      <li><a href="#brands" class="nav-link" data-page="brands" data-tip="Brands"><svg class="ico"><use href="#i-tag"/></svg><span class="txt">Brands</span></a></li>
       <li><a href="#settings" class="nav-link" data-page="settings" data-tip="Settings"><svg class="ico"><use href="#i-settings"/></svg><span class="txt">Settings</span></a></li>
       <li><a href="#live-logs" class="nav-link" data-page="live-logs" data-tip="Live Logs"><svg class="ico"><use href="#i-activity"/></svg><span class="txt">Live Logs</span></a></li>
     </ul>
@@ -641,7 +602,7 @@
 <header class="mobile-bar">
   <button class="icon-btn" onclick="openNav()" aria-label="Open menu"><svg class="ico"><use href="#i-menu"/></svg></button>
   <div class="title" id="mobile-title">Dashboard</div>
-  <button class="icon-btn" onclick="go('new-call')" aria-label="New call"><svg class="ico"><use href="#i-phone-out"/></svg></button>
+  <button class="icon-btn" onclick="go('campaigns')" aria-label="Campaigns"><svg class="ico"><use href="#i-phone-out"/></svg></button>
 </header>
 
 <main>
@@ -654,7 +615,6 @@
       <p class="subtitle">How your AI agent is performing</p>
     </div>
     <div class="head-actions">
-      <select id="dash-brand-filter" onchange="loadDashboard()" aria-label="Filter by brand"><option value="">All brands</option></select>
       <button class="btn btn-outline" onclick="exportRecentCalls()"><svg class="ico"><use href="#i-download"/></svg>Export</button>
       <button class="btn btn-primary" onclick="loadDashboard()"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button>
     </div>
@@ -697,9 +657,9 @@
       <div class="kpi-sub">est. USD</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Callbacks</span><span class="kpi-icon"><svg class="ico"><use href="#i-history"/></svg></span></div>
-      <div class="kpi-value" id="st-callbacks">—</div>
-      <div class="kpi-sub">to follow up</div>
+      <div class="kpi-head"><span class="kpi-label">Missed-class reasons</span><span class="kpi-icon"><svg class="ico"><use href="#i-calendar-x"/></svg></span></div>
+      <div class="kpi-value" id="st-reasons">—</div>
+      <div class="kpi-sub" id="st-reasons-sub">recorded by Tara</div>
     </div>
   </div>
 
@@ -732,12 +692,12 @@
     </div>
   </div>
 
-  <div class="section-label">By brand</div>
+  <div class="section-label">By campaign</div>
   <div class="card">
     <div class="table-wrap">
       <table class="rtable">
-        <thead><tr><th>Brand</th><th class="num">Calls</th><th class="num">Booked</th><th class="num">Booking rate</th><th class="num">Spend (est. USD)</th></tr></thead>
-        <tbody id="brand-breakdown-body"></tbody>
+        <thead><tr><th>Campaign</th><th class="num">Calls</th><th class="num">Connected</th><th class="num">Trials booked</th><th class="num">Reasons recorded</th><th class="num">Spend (est. USD)</th></tr></thead>
+        <tbody id="campaign-breakdown-body"></tbody>
       </table>
     </div>
   </div>
@@ -754,107 +714,131 @@
   </div>
 </section>
 
-<!-- NEW CALL -->
-<section class="page" id="page-new-call">
-  <div class="page-head">
-    <div>
-      <h1>New call</h1>
-      <p class="subtitle">Send the AI agent to one number, or upload a CSV to call a list</p>
-    </div>
-  </div>
-
-  <div class="tabs" id="call-tabs" role="tablist">
-    <button data-tab="single" class="active" role="tab"><svg class="ico ico-sm"><use href="#i-phone"/></svg>Single call</button>
-    <button data-tab="batch" role="tab"><svg class="ico ico-sm"><use href="#i-upload"/></svg>Batch from CSV</button>
-  </div>
-
-  <div class="tab-panel active" id="tab-single">
-    <div class="card" style="max-width:820px">
-      <div class="card-body">
-        <div class="form-grid">
-          <div class="form-group"><label for="sc-phone">Phone number <span class="muted">*</span></label><input id="sc-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+91 98765 43210" /></div>
-          <div class="form-group"><label for="sc-name">Lead name</label><input id="sc-name" autocomplete="name" placeholder="Rahul Sharma" /></div>
-          <div class="form-group"><label for="sc-brand">Brand</label>
-            <select id="sc-brand"><option value="">Default brand</option></select>
-          </div>
-          <div class="form-group"><label for="sc-campaign">Campaign</label>
-            <select id="sc-campaign"><option value="">Default script</option></select>
-          </div>
-          <div class="form-group full">
-            <label for="sc-prompt">Extra instructions <span class="lbl-hint">— optional</span></label>
-            <textarea id="sc-prompt" placeholder="Anything specific for this call. The selected campaign stays the main script."></textarea>
-          </div>
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" id="sc-submit" onclick="dispatchSingleCall()"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="tab-panel" id="tab-batch">
-    <div class="card" style="max-width:820px">
-      <div class="card-body">
-        <div class="drop-zone" id="batch-drop" role="button" tabindex="0" onclick="document.getElementById('batch-file').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
-          <div class="dz-ico"><svg class="ico"><use href="#i-upload"/></svg></div>
-          <div class="dz-title"><span>Click to upload</span> or drag a CSV here</div>
-          <div class="hint" style="margin-top:4px">Required columns: <code class="mono">phone</code>, <code class="mono">name</code></div>
-          <input type="file" id="batch-file" accept=".csv" style="display:none" onchange="onBatchFileSelect(this)" />
-        </div>
-        <div class="file-pill" id="batch-file-name"></div>
-        <div class="form-grid three" style="margin-top:20px">
-          <div class="form-group"><label for="bk-delay">Delay between calls (sec)</label><input id="bk-delay" type="number" inputmode="numeric" value="3" min="0" /></div>
-          <div class="form-group"><label for="bk-brand">Brand</label>
-            <select id="bk-brand"><option value="">Default brand</option></select>
-          </div>
-          <div class="form-group"><label for="bk-campaign">Campaign</label>
-            <select id="bk-campaign"><option value="">Default script</option></select>
-          </div>
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" id="bk-submit" onclick="dispatchBatch()"><svg class="ico"><use href="#i-play"/></svg>Start batch</button>
-        </div>
-        <div id="batch-results" style="margin-top:16px"></div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- CAMPAIGNS -->
 <section class="page" id="page-campaigns">
   <div class="page-head">
     <div>
       <h1>Campaigns</h1>
-      <p class="subtitle">Each campaign belongs to a brand and uses its voice, facts and booking setup. The AI writes the script from the campaign's purpose.</p>
-    </div>
-    <div class="head-actions">
-      <button class="btn btn-primary" onclick="openNewCampaignModal()"><svg class="ico"><use href="#i-plus"/></svg>New campaign</button>
+      <p class="subtitle">Call one person, or upload a list and Tara calls everyone on it</p>
     </div>
   </div>
-  <div id="campaigns-list" class="camp-grid"></div>
+
+  <div class="camp-grid">
+    <div class="card camp-card">
+      <div class="camp-top">
+        <div style="min-width:0">
+          <div class="camp-title">Trial booking</div>
+          <div class="camp-brand">Invite new leads to Harry's Fitcamp and book a free one-hour trial</div>
+        </div>
+        <span class="kpi-icon green"><svg class="ico"><use href="#i-calendar-check"/></svg></span>
+      </div>
+      <div class="camp-body">
+        <div class="form-grid">
+          <div class="form-group"><label for="tr-phone">Phone number <span class="muted">*</span></label><input id="tr-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+91 98765 43210" /></div>
+          <div class="form-group"><label for="tr-name">Name</label><input id="tr-name" autocomplete="name" placeholder="Rahul Sharma" /></div>
+        </div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-primary" id="tr-call" onclick="callOne('trial')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+        </div>
+        <div class="section-label" style="margin:22px 0 10px">Or upload a call list</div>
+        <div class="drop-zone list-drop" data-campaign="trial" role="button" tabindex="0">
+          <div class="dz-title"><span>Choose a CSV</span> or drag it here</div>
+          <div class="hint" style="margin-top:4px">Columns: <code class="mono">phone</code>, <code class="mono">name</code></div>
+          <input type="file" id="tr-file" accept=".csv" style="display:none" onchange="onListFile('trial', this.files[0])" />
+        </div>
+        <div class="file-pill" id="tr-file-name"></div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-outline" id="tr-upload" onclick="uploadList('trial')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card camp-card">
+      <div class="camp-top">
+        <div style="min-width:0">
+          <div class="camp-title">Missed class</div>
+          <div class="camp-brand">Ask members why they missed class, record it, and encourage them to come regularly</div>
+        </div>
+        <span class="kpi-icon amber"><svg class="ico"><use href="#i-calendar-x"/></svg></span>
+      </div>
+      <div class="camp-body">
+        <div class="form-grid three">
+          <div class="form-group"><label for="mc-phone">Phone number <span class="muted">*</span></label><input id="mc-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+91 98765 43210" /></div>
+          <div class="form-group"><label for="mc-name">Member name</label><input id="mc-name" autocomplete="name" placeholder="Priya" /></div>
+          <div class="form-group"><label for="mc-missed">Missed class on</label><input id="mc-missed" type="date" /></div>
+        </div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-primary" id="mc-call" onclick="callOne('missed_class')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+        </div>
+        <div class="section-label" style="margin:22px 0 10px">Or upload a call list</div>
+        <div class="drop-zone list-drop" data-campaign="missed_class" role="button" tabindex="0">
+          <div class="dz-title"><span>Choose a CSV</span> or drag it here</div>
+          <div class="hint" style="margin-top:4px">Columns: <code class="mono">phone</code>, <code class="mono">name</code>, optional <code class="mono">missed_date</code></div>
+          <input type="file" id="mc-file" accept=".csv" style="display:none" onchange="onListFile('missed_class', this.files[0])" />
+        </div>
+        <div class="file-pill" id="mc-file-name"></div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-outline" id="mc-upload" onclick="uploadList('missed_class')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Call lists</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="rtable">
+        <thead><tr><th>List</th><th>Campaign</th><th>Progress</th><th>Status</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody id="runs-body"></tbody>
+      </table>
+    </div>
+    <div class="card-foot"><span class="page-info">Calls only go out inside the permitted calling hours, and never to numbers on the Do-Not-Call list.</span><button class="btn btn-ghost btn-sm" onclick="loadRuns()"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button></div>
+  </div>
 </section>
 
 <!-- APPOINTMENTS -->
 <section class="page" id="page-appointments">
   <div class="page-head">
     <div>
-      <h1>Bookings</h1>
-      <p class="subtitle">Appointments booked across your brands</p>
+      <h1>Trial bookings</h1>
+      <p class="subtitle">Free one-hour trials at ADAYAR and ECR</p>
     </div>
     <div class="head-actions">
       <button class="btn btn-primary" onclick="openAddApptModal()"><svg class="ico"><use href="#i-plus"/></svg>Add booking</button>
     </div>
   </div>
   <div class="toolbar">
-    <select id="appt-brand-filter" onchange="loadAppointments()" aria-label="Filter by brand"><option value="">All brands</option></select>
     <input id="appt-date-filter" type="date" onchange="loadAppointments()" aria-label="Filter by date" />
     <button class="btn btn-ghost btn-sm" onclick="document.getElementById('appt-date-filter').value=''; loadAppointments()">Clear date</button>
   </div>
   <div class="card">
     <div class="table-wrap">
       <table class="rtable">
-        <thead><tr><th>Name</th><th>Date</th><th>Time</th><th>Brand</th><th>Service</th><th>Location</th><th>Resource</th><th>Phone</th><th>Duration</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Date</th><th>Time</th><th>Branch</th><th>Phone</th><th>Status</th><th></th></tr></thead>
         <tbody id="appt-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- MISSED CLASSES -->
+<section class="page" id="page-missed">
+  <div class="page-head">
+    <div>
+      <h1>Missed classes</h1>
+      <p class="subtitle">Why members missed class, as they told Tara</p>
+    </div>
+    <div class="head-actions">
+      <button class="btn btn-outline" onclick="exportMissed()"><svg class="ico"><use href="#i-download"/></svg>Export</button>
+      <button class="btn btn-primary" onclick="loadMissed()"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button>
+    </div>
+  </div>
+  <div class="reason-summary" id="missed-summary"></div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="rtable">
+        <thead><tr><th>Member</th><th>Phone</th><th>Missed on</th><th>Reason</th><th>In their words</th><th>Coming back</th><th>Called</th><th></th></tr></thead>
+        <tbody id="missed-body"></tbody>
       </table>
     </div>
   </div>
@@ -869,12 +853,17 @@
     </div>
   </div>
   <div class="toolbar">
-    <select id="calls-brand-filter" onchange="loadCalls(1)" aria-label="Filter by brand"><option value="">All brands</option></select>
+    <select id="calls-campaign-filter" onchange="loadCalls(1)" aria-label="Filter by campaign">
+      <option value="">All calls</option>
+      <option value="trial">Trial booking</option>
+      <option value="missed_class">Missed class</option>
+      <option value="inbound">Incoming calls</option>
+    </select>
   </div>
   <div class="card">
     <div class="table-wrap">
       <table class="rtable">
-        <thead><tr><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Brand</th><th>Time</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>Outcome</th><th>Duration</th><th>Campaign</th><th>Time</th><th>Notes</th><th>Transcript</th><th>Recording</th></tr></thead>
         <tbody id="calls-body"></tbody>
       </table>
     </div>
@@ -910,41 +899,6 @@
       </table>
     </div>
   </div>
-</section>
-
-<!-- BRANDS -->
-<section class="page" id="page-brands">
-  <div class="page-head">
-    <div>
-      <h1>Brands</h1>
-      <p class="subtitle">Each brand is a separate business with its own scripts, facts, booking setup and inbound numbers</p>
-    </div>
-    <div class="head-actions">
-      <button class="btn btn-primary" onclick="openNewBrandModal()"><svg class="ico"><use href="#i-plus"/></svg>New brand</button>
-    </div>
-  </div>
-  <div class="card">
-    <div class="table-wrap">
-      <table class="rtable">
-        <thead><tr><th>Name</th><th>Assistant</th><th>Inbound numbers</th><th>Default</th><th></th></tr></thead>
-        <tbody id="brands-body"></tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<!-- AGENT PROFILES (not linked in nav; reachable via #agent-profiles) -->
-<section class="page" id="page-agent-profiles">
-  <div class="page-head">
-    <div>
-      <h1>Agent profiles</h1>
-      <p class="subtitle">Named AI configurations — voice, model, prompt and tools</p>
-    </div>
-    <div class="head-actions">
-      <button class="btn btn-primary" onclick="openNewProfileModal()"><svg class="ico"><use href="#i-plus"/></svg>New profile</button>
-    </div>
-  </div>
-  <div class="profile-grid" id="profiles-grid"></div>
 </section>
 
 <!-- SETTINGS -->
@@ -996,307 +950,29 @@
 
 <!-- ── MODALS ── -->
 
-<!-- New Campaign -->
-<div class="modal-overlay" id="modal-campaign" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
-  <div class="modal">
-    <div class="modal-head">
-      <div><h2 id="cmp-title">New campaign</h2><div class="sub">Describe the goal and the AI writes the call script.</div></div>
-      <button class="icon-btn modal-close" onclick="closeModal('modal-campaign')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
-    </div>
-    <div class="modal-body stack">
-      <div class="form-group"><label for="cmp-name">Campaign name <span class="muted">*</span></label><input id="cmp-name" placeholder="June dental check-ups" /></div>
-      <div class="form-group"><label for="cmp-brand">Brand</label>
-        <select id="cmp-brand"><option value="">Default brand</option></select>
-      </div>
-      <div class="form-group">
-        <label for="cmp-purpose">Purpose</label>
-        <textarea id="cmp-purpose" rows="4" placeholder="e.g. Offer a free dental check-up this June and book interested people into a slot."></textarea>
-        <span class="hint">The script is generated from this and improves as you add feedback.</span>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline" onclick="closeModal('modal-campaign')">Cancel</button>
-      <button class="btn btn-primary" onclick="createCampaign()">Create campaign</button>
-    </div>
-  </div>
-</div>
-
 <!-- Add Appointment -->
 <div class="modal-overlay" id="modal-appt" role="dialog" aria-modal="true" aria-labelledby="appt-title">
   <div class="modal">
     <div class="modal-head">
-      <div><h2 id="appt-title">Add booking</h2></div>
+      <div><h2 id="appt-title">Add trial booking</h2><div class="sub">One-hour trial. Monday–Saturday.</div></div>
       <button class="icon-btn modal-close" onclick="closeModal('modal-appt')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
       <div class="form-grid">
-        <div class="form-group full"><label for="appt-brand">Brand <span class="muted">*</span></label>
-          <select id="appt-brand" onchange="onApptBrandChange()"></select>
-        </div>
-        <div class="form-group full" id="appt-service-group" style="display:none"><label for="appt-service">Service <span class="muted">*</span></label>
-          <select id="appt-service"></select>
-        </div>
         <div class="form-group"><label for="appt-name">Name <span class="muted">*</span></label><input id="appt-name" autocomplete="name" /></div>
         <div class="form-group"><label for="appt-phone">Phone <span class="muted">*</span></label><input id="appt-phone" type="tel" inputmode="tel" placeholder="+91 98765 43210" /></div>
         <div class="form-group"><label for="appt-date">Date <span class="muted">*</span></label><input id="appt-date" type="date" /></div>
-        <div class="form-group" id="appt-time-fixed-group"><label for="appt-time">Start time <span class="muted">*</span></label>
+        <div class="form-group"><label for="appt-time">Start time <span class="muted">*</span></label>
           <select id="appt-time"></select>
         </div>
-        <div class="form-group" id="appt-time-open-group" style="display:none"><label for="appt-time-open">Start time <span class="muted">*</span></label>
-          <input id="appt-time-open" type="time" />
-        </div>
-        <div class="form-group" id="appt-location-group"><label for="appt-location">Location <span class="muted">*</span></label>
+        <div class="form-group"><label for="appt-location">Branch <span class="muted">*</span></label>
           <select id="appt-location"></select>
-        </div>
-        <div class="form-group" id="appt-resource-group" style="display:none"><label for="appt-resource">Person / court</label>
-          <select id="appt-resource"></select>
         </div>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-appt')">Cancel</button>
       <button class="btn btn-primary" onclick="createAppt()">Book</button>
-    </div>
-  </div>
-</div>
-
-<!-- Agent Profile -->
-<div class="modal-overlay" id="modal-profile" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
-  <div class="modal modal-md">
-    <div class="modal-head">
-      <div><h2 id="profile-modal-title">New agent profile</h2></div>
-      <button class="icon-btn modal-close" onclick="closeModal('modal-profile')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
-    </div>
-    <div class="modal-body">
-      <input type="hidden" id="profile-edit-id" />
-      <div class="form-grid">
-        <div class="form-group full"><label for="pr-name">Profile name <span class="muted">*</span></label><input id="pr-name" placeholder="Tina — Dental" /></div>
-        <div class="form-group"><label for="pr-voice">Voice</label>
-          <select id="pr-voice">
-            <option value="Aoede">Aoede (F)</option>
-            <option value="Charon">Charon (M)</option>
-            <option value="Fenrir">Fenrir (M)</option>
-            <option value="Kore">Kore (F)</option>
-            <option value="Puck">Puck (M)</option>
-            <option value="Schedar">Schedar (F)</option>
-            <option value="Leda">Leda (F)</option>
-            <option value="Orus">Orus (M)</option>
-          </select>
-        </div>
-        <div class="form-group"><label for="pr-model">Model</label>
-          <select id="pr-model">
-            <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
-            <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio (greets on outbound)</option>
-          </select>
-        </div>
-        <div class="form-group full">
-          <label class="check"><input type="checkbox" id="pr-default" /> Make this the default agent profile</label>
-        </div>
-        <div class="form-group full">
-          <label for="pr-prompt">System prompt <span class="lbl-hint">— blank uses the global default</span></label>
-          <textarea id="pr-prompt" rows="6" placeholder="Optional per-profile instructions…"></textarea>
-        </div>
-        <div class="form-group full">
-          <label>Enabled tools</label>
-          <div class="tools-grid" id="tools-checkboxes"></div>
-        </div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline" onclick="closeModal('modal-profile')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveProfile()">Save profile</button>
-    </div>
-  </div>
-</div>
-
-<!-- Brand editor -->
-<div class="modal-overlay" id="modal-brand" role="dialog" aria-modal="true" aria-labelledby="brand-modal-title">
-  <div class="modal modal-lg">
-    <div class="modal-head" style="border-bottom:none;padding-bottom:8px">
-      <div>
-        <h2 id="brand-modal-title">New brand</h2>
-        <div class="sub" id="brand-modal-sub">Describe your business once and we'll set up its receptionist, facts and a starter outbound style.</div>
-      </div>
-      <button class="icon-btn modal-close" onclick="closeModal('modal-brand')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
-    </div>
-    <input type="hidden" id="br-edit-id" />
-
-    <div class="tabbar" id="brand-tabbar" role="tablist">
-      <button type="button" class="tabbtn active" data-tab="business" onclick="switchBrandTab('business')"><svg class="ico ico-sm"><use href="#i-tag"/></svg>Business</button>
-      <button type="button" class="tabbtn" data-tab="reception" onclick="switchBrandTab('reception')"><svg class="ico ico-sm"><use href="#i-phone"/></svg>Receptionist</button>
-      <button type="button" class="tabbtn" data-tab="booking" onclick="switchBrandTab('booking')"><svg class="ico ico-sm"><use href="#i-calendar"/></svg>Booking</button>
-      <button type="button" class="tabbtn" data-tab="advanced" onclick="switchBrandTab('advanced')"><svg class="ico ico-sm"><use href="#i-settings"/></svg>Advanced</button>
-    </div>
-
-    <div class="modal-body">
-      <!-- BUSINESS -->
-      <div class="tabpane active" id="brtab-business">
-        <div class="hero-note"><svg class="ico"><use href="#i-sparkles"/></svg><div id="br-hero-note">Start here: enter the name, describe your business, and hit <strong>Generate</strong>. We'll write the receptionist script, the business facts and a starter outbound style — all editable afterwards.</div></div>
-        <div class="form-grid three">
-          <div class="form-group"><label for="br-name">Brand name <span class="muted">*</span></label><input id="br-name" maxlength="80" placeholder="Your business name" /></div>
-          <div class="form-group"><label for="br-assistant">Assistant name</label><input id="br-assistant" maxlength="40" placeholder="Tina" /></div>
-          <div class="form-group"><label for="br-voice">Voice</label>
-            <select id="br-voice">
-              <option value="">Default</option>
-              <option value="Aoede">Aoede (F)</option>
-              <option value="Charon">Charon (M)</option>
-              <option value="Fenrir">Fenrir (M)</option>
-              <option value="Kore">Kore (F)</option>
-              <option value="Puck">Puck (M)</option>
-              <option value="Schedar">Schedar (F)</option>
-              <option value="Leda">Leda (F)</option>
-              <option value="Orus">Orus (M)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="panel accent" style="margin-top:16px">
-          <div class="form-group">
-            <label for="br-describe">Describe the business — AI drafts the receptionist, facts and outbound style</label>
-            <textarea id="br-describe" maxlength="1500" oninput="updateCharCount(this)" rows="3" placeholder="What the business does, what the agent should do on calls, hours, offers, pricing, locations… e.g. 'A dental clinic in Bandra. The agent calls leads to book free check-ups. Open 10am–7pm, one branch.'"></textarea>
-            <div id="br-describe-count" class="char-count"></div>
-          </div>
-          <div class="inline-row" style="margin-top:8px">
-            <button class="btn btn-primary btn-sm" onclick="generateBrandPrompts()"><svg class="ico"><use href="#i-sparkles"/></svg>Generate</button>
-            <span id="br-gen-status" class="status-text"></span>
-          </div>
-          <div class="divider"></div>
-          <div class="form-group">
-            <label for="br-feedback">Already generated? Give feedback and the AI refines everything</label>
-            <div class="inline-row">
-              <input id="br-feedback" placeholder="e.g. shorter and friendlier, mention the free first session" />
-              <button class="btn btn-outline btn-sm" onclick="refineBrandPrompts()"><svg class="ico"><use href="#i-message"/></svg>Apply feedback</button>
-            </div>
-            <div class="inline-row">
-              <span id="br-refine-status" class="status-text"></span>
-              <button id="br-refine-undo" class="btn btn-ghost btn-sm" style="display:none" onclick="undoBrandRefine()"><svg class="ico"><use href="#i-undo"/></svg>Undo</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="form-group" style="margin-top:16px">
-          <label for="br-context">Business facts <span class="lbl-hint">— the source of truth, included in every call</span></label>
-          <textarea id="br-context" maxlength="4000" oninput="updateCharCount(this)" rows="5" placeholder="Key facts: what the business does, hours, offers, pricing… (or generate them above)"></textarea>
-          <div id="br-context-count" class="char-count"></div>
-        </div>
-
-        <div class="switch-row" style="margin-top:16px">
-          <div>
-            <div style="font-weight:600;font-size:14px">Default brand</div>
-            <div class="hint">Handles calls with no brand set and inbound numbers that don't match another brand.</div>
-          </div>
-          <label class="check"><input type="checkbox" id="br-default" /> Make default</label>
-        </div>
-      </div>
-
-      <!-- RECEPTIONIST -->
-      <div class="tabpane" id="brtab-reception">
-        <div class="hero-note"><svg class="ico"><use href="#i-phone"/></svg><div>How this brand answers <strong>incoming</strong> calls — its always-on front desk. Separate from outbound campaigns: one receptionist handles every caller.</div></div>
-        <div class="stack">
-          <div class="form-group">
-            <label for="br-numbers">Inbound numbers <span class="lbl-hint">— comma-separated numbers that ring this brand</span></label>
-            <input id="br-numbers" placeholder="+914440001111, +914440002222" />
-          </div>
-          <div class="form-group">
-            <label for="br-greeting">Greeting <span class="lbl-hint">— spoken the instant a call connects; blank uses a default</span></label>
-            <input id="br-greeting" maxlength="300" placeholder="Hi, this is {assistant_name} from {brand_name}. How can I help?" />
-            <span class="hint">Tokens: <code class="mono">{lead_name}</code> <code class="mono">{assistant_name}</code> <code class="mono">{brand_name}</code></span>
-          </div>
-          <div class="form-group">
-            <label for="br-inbound">Receptionist script <span class="lbl-hint">— blank uses the default</span></label>
-            <textarea id="br-inbound" maxlength="8000" oninput="updateCharCount(this)" rows="8" placeholder="How the agent should answer when someone calls this brand… (or generate it from the Business tab)"></textarea>
-            <div id="br-inbound-count" class="char-count"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- BOOKING -->
-      <div class="tabpane" id="brtab-booking">
-        <div class="hero-note"><svg class="ico"><use href="#i-calendar"/></svg><div>How appointments work for this brand — used by the receptionist and by outbound campaigns.</div></div>
-        <div class="stack">
-          <div class="form-group">
-            <label>When can people book?</label>
-            <div class="inline-row" style="gap:18px">
-              <label class="check"><input type="radio" name="br-slotmode" value="fixed" onchange="onSlotModeChange()"> Fixed start times</label>
-              <label class="check"><input type="radio" name="br-slotmode" value="open_hours" onchange="onSlotModeChange()"> Any time within open hours</label>
-            </div>
-          </div>
-          <div class="form-group" id="br-fixed-block">
-            <label for="br-slottimes">Start times <span class="lbl-hint">— comma-separated, 24h</span></label>
-            <input id="br-slottimes" placeholder="06:00, 07:00, 08:00, 16:30" />
-          </div>
-          <div class="form-grid three" id="br-open-block" style="display:none">
-            <div class="form-group"><label for="br-open-start">Open from</label><input id="br-open-start" type="time" /></div>
-            <div class="form-group"><label for="br-open-end">Open until</label><input id="br-open-end" type="time" /></div>
-            <div class="form-group"><label for="br-interval">Slot interval (min)</label><input id="br-interval" type="number" inputmode="numeric" min="5" value="30" /></div>
-          </div>
-          <div class="form-group" id="br-duration-group">
-            <label for="br-duration">Booking length (minutes)</label>
-            <input id="br-duration" type="number" inputmode="numeric" min="5" value="60" style="max-width:140px" />
-            <span class="hint">Used when no services are listed below.</span>
-          </div>
-          <div class="form-group">
-            <label>Closed days</label>
-            <div id="br-offdays" class="chip-row">
-              <label><input type="checkbox" class="br-off" value="0"> Mon</label>
-              <label><input type="checkbox" class="br-off" value="1"> Tue</label>
-              <label><input type="checkbox" class="br-off" value="2"> Wed</label>
-              <label><input type="checkbox" class="br-off" value="3"> Thu</label>
-              <label><input type="checkbox" class="br-off" value="4"> Fri</label>
-              <label><input type="checkbox" class="br-off" value="5"> Sat</label>
-              <label><input type="checkbox" class="br-off" value="6"> Sun</label>
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="br-locations">Locations / branches <span class="lbl-hint">— comma-separated; blank if a single place</span></label>
-            <input id="br-locations" placeholder="e.g. Downtown, Uptown" />
-          </div>
-          <div class="form-group">
-            <label>Services <span class="lbl-hint">— name and minutes; leave empty for one default service</span></label>
-            <div id="br-svc-rows"></div>
-            <div><button type="button" class="btn btn-outline btn-sm" onclick="addServiceRow()"><svg class="ico"><use href="#i-plus"/></svg>Add service</button></div>
-          </div>
-          <div class="form-group">
-            <label>Bookable people / courts / rooms <span class="lbl-hint">— each booked one at a time</span></label>
-            <div id="br-res-rows"></div>
-            <div><button type="button" class="btn btn-outline btn-sm" onclick="addResourceRow()"><svg class="ico"><use href="#i-plus"/></svg>Add resource</button></div>
-          </div>
-          <div class="form-group" id="br-capacity-group">
-            <label for="br-capacity">Capacity per slot <span class="lbl-hint">— 0 = unlimited; ignored when resources are listed</span></label>
-            <input id="br-capacity" type="number" inputmode="numeric" min="0" value="1" style="max-width:140px" />
-          </div>
-          <details class="adv">
-            <summary>Advanced — raw JSON</summary>
-            <textarea id="br-booking" rows="4" class="mono" placeholder='{"slot_mode":"fixed","slot_times":["06:00"],"capacity_per_slot":1}'></textarea>
-            <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px" onclick="applyBookingJson()">Apply JSON to fields</button>
-          </details>
-        </div>
-      </div>
-
-      <!-- ADVANCED -->
-      <div class="tabpane" id="brtab-advanced">
-        <div class="hero-note"><svg class="ico"><use href="#i-info"/></svg><div>Most outbound calls run through <strong>Campaigns</strong>, which write their own script. The script below is only used for one-off calls placed without a campaign, and as the starting style for new campaigns.</div></div>
-        <div class="stack">
-          <div class="form-group">
-            <label for="br-model">Model <span class="lbl-hint">— optional override</span></label>
-            <select id="br-model">
-              <option value="">Default</option>
-              <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
-              <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio (greets on outbound)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label for="br-outbound">Outbound default script <span class="lbl-hint">— blank uses the default</span></label>
-            <textarea id="br-outbound" maxlength="8000" oninput="updateCharCount(this)" rows="8" placeholder="The default script for one-off outbound calls without a campaign… (or generate it from the Business tab)"></textarea>
-            <div id="br-outbound-count" class="char-count"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn btn-outline" onclick="closeModal('modal-brand')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveBrand()">Save brand</button>
     </div>
   </div>
 </div>
@@ -1311,7 +987,7 @@
     <div class="modal-body">
       <div id="contact-modal-body"></div>
       <div class="form-group" style="margin-top:18px">
-        <label for="contact-new-memory">Add a note the agent will remember</label>
+        <label for="contact-new-memory">Add a note for the team</label>
         <div class="inline-row">
           <input id="contact-new-memory" placeholder="e.g. Prefers morning calls" />
           <button class="btn btn-primary btn-sm" onclick="addMemoryNote()"><svg class="ico"><use href="#i-plus"/></svg>Add</button>
@@ -1510,8 +1186,8 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 const PAGE_TITLES = {
-  'dashboard': 'Dashboard', 'new-call': 'New call', 'campaigns': 'Campaigns', 'appointments': 'Bookings',
-  'call-logs': 'Call logs', 'crm': 'Contacts', 'brands': 'Brands', 'agent-profiles': 'Agent profiles',
+  'dashboard': 'Dashboard', 'campaigns': 'Campaigns', 'appointments': 'Trial bookings',
+  'missed': 'Missed classes', 'call-logs': 'Call logs', 'crm': 'Contacts',
   'settings': 'Settings', 'live-logs': 'Live logs',
 };
 
@@ -1523,7 +1199,7 @@ function go(page, push = true) {
   document.querySelectorAll('nav a[data-page]').forEach(x => x.classList.toggle('active', x.dataset.page === page));
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-' + page));
   document.getElementById('mobile-title').textContent = PAGE_TITLES[page] || '';
-  document.title = (PAGE_TITLES[page] || 'Dashboard') + ' · T-800';
+  document.title = (PAGE_TITLES[page] || 'Dashboard') + " · Harry's Fitcamp";
   if (push && location.hash !== '#' + page) history.pushState(null, '', '#' + page);
   document.querySelectorAll('.modal-overlay.open').forEach(m => closeModal(m.id));
   closeNav();
@@ -1542,32 +1218,28 @@ document.addEventListener('keydown', e => {
 });
 
 function onPageLoad(page) {
-  if (page === 'dashboard')      { populateBrandFilter('dash-brand-filter'); loadDashboard(); }
-  if (page === 'new-call')       {
-    loadCampaignsIntoSelect('sc-campaign');
-    loadCampaignsIntoSelect('bk-campaign');
-    loadBrandsIntoSelect('sc-brand');
-    loadBrandsIntoSelect('bk-brand');
-  }
-  if (page === 'campaigns')      { loadCampaigns(); }
-  if (page === 'appointments')   { populateBrandFilter('appt-brand-filter'); loadAppointments(); }
-  if (page === 'call-logs')      { loadBrandFilter(); loadCalls(1); }
-  if (page === 'crm')            { loadCRM(); }
-  if (page === 'brands')         { loadBrands(); }
-  if (page === 'agent-profiles') { loadProfiles(); }
-  if (page === 'settings')       { loadSettings(); }
-  if (page === 'live-logs')      { loadLogs(); }
+  if (page === 'dashboard')    { loadDashboard(); }
+  if (page === 'campaigns')    { loadRuns(); }
+  if (page === 'appointments') { loadAppointments(); }
+  if (page === 'missed')       { loadMissed(); }
+  if (page === 'call-logs')    { loadCalls(1); }
+  if (page === 'crm')          { loadCRM(); }
+  if (page === 'settings')     { loadSettings(); }
+  if (page === 'live-logs')    { loadLogs(); }
 }
 
-// ── New Call tabs (Single / Batch) ──────────────────────────────────────────────
-document.querySelectorAll('#call-tabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#call-tabs button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('#page-new-call .tab-panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-  });
-});
+// ── Business setup (branches, session times, campaigns) from /business ───────
+let BUSINESS = null;
+async function ensureBusiness() {
+  if (!BUSINESS) BUSINESS = await api('/business');
+  return BUSINESS;
+}
+const CAMPAIGN_LABELS = { trial: 'Trial booking', missed_class: 'Missed class', inbound: 'Incoming calls', earlier: 'Earlier calls' };
+const campaignBadge = c => badge(c || 'earlier', CAMPAIGN_LABELS[c || 'earlier'] || c);
+function reasonLabel(key) {
+  const labels = (BUSINESS && BUSINESS.missed_reasons) || {};
+  return labels[key] || (key ? String(key).replace(/_/g, ' ') : '—');
+}
 
 // ── Charts ────────────────────────────────────────────────────────────────────
 const OUTCOME_LABELS = {
@@ -1642,14 +1314,10 @@ function initCharts(timeline, outcomes) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function fmtMoney(n, dp=2) { return '$' + (Number(n) || 0).toFixed(dp); }
-function dashBrand() { return (document.getElementById('dash-brand-filter') || {}).value || ''; }
 
 async function loadDashboard() {
   try {
-    await ensureBrands();
-    const brand = dashBrand();
-    const qs = brand ? '?brand_id=' + encodeURIComponent(brand) : '';
-    const s = await api('/stats' + qs);
+    const s = await api('/stats');
     const total = s.total_calls || 0;
     document.getElementById('st-total').textContent = fmtCompact(total);
     document.getElementById('st-total-sub').textContent = (s.calls_today || 0) + ' today';
@@ -1662,36 +1330,32 @@ async function loadDashboard() {
     document.getElementById('st-spend').textContent = fmtMoney(s.total_cost, 2);
     document.getElementById('st-spend-sub').textContent = fmtMoney(s.cost_per_call, 4) + ' per call';
     document.getElementById('st-cpb').textContent = s.booked ? fmtMoney(s.cost_per_booking, 2) : '—';
-    document.getElementById('st-callbacks').textContent = fmtCompact(s.callbacks_pending || 0);
+    document.getElementById('st-reasons').textContent = fmtCompact(s.missed_reasons_total || 0);
     document.getElementById('st-trials-upcoming').textContent = fmtCompact(s.trials_upcoming || 0);
     document.getElementById('st-trials-cancel').textContent = (s.trial_cancel_rate_percent || 0) + '%';
     document.getElementById('st-trials-cancel-sub').textContent = `${s.trials_cancelled || 0} of ${s.trials_total || 0} trials`;
     document.getElementById('donut-pct').textContent = (s.booking_rate_percent || 0) + '%';
     initCharts(s.timeline || [], s.outcomes || {});
-    loadBrandBreakdown();
+    renderCampaignBreakdown(s.by_campaign || []);
     loadRecentCalls();
   } catch(e) { toast('Could not load stats: ' + e.message, false); }
 }
 
-async function loadBrandBreakdown() {
-  try {
-    const rows = await api('/stats/brands');
-    const tbody = document.getElementById('brand-breakdown-body');
-    tbody.innerHTML = rows.map(b => `
-      <tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td class="num">${fmtCompact(b.total_calls)}</td>
-        <td class="num">${fmtCompact(b.booked)}</td>
-        <td class="num">${esc(b.booking_rate_percent)}%</td>
-        <td class="num">${fmtMoney(b.total_cost, 2)}</td>
-      </tr>`).join('') || emptyRow(5, 'No calls yet', 'Brand stats appear once calls are made.', 'tag');
-  } catch(e) {}
+function renderCampaignBreakdown(rows) {
+  document.getElementById('campaign-breakdown-body').innerHTML = rows.map(b => `
+    <tr>
+      <td>${campaignBadge(b.campaign)}</td>
+      <td class="num">${fmtCompact(b.calls)}</td>
+      <td class="num">${fmtCompact(b.connected)}</td>
+      <td class="num">${b.campaign === 'missed_class' ? '—' : fmtCompact(b.booked)}</td>
+      <td class="num">${b.campaign === 'missed_class' ? fmtCompact(b.reasons || 0) : '—'}</td>
+      <td class="num">${fmtMoney(b.cost, 2)}</td>
+    </tr>`).join('') || emptyRow(6, 'No calls yet', 'Campaign stats appear once calls are made.', 'megaphone');
 }
 
 async function loadRecentCalls() {
   try {
-    const brand = dashBrand();
-    const calls = await api('/calls?limit=8' + (brand ? '&brand_id=' + encodeURIComponent(brand) : ''));
+    const calls = await api('/calls?limit=8');
     const tbody = document.querySelector('#tbl-recent tbody');
     tbody.innerHTML = calls.slice(0,8).map(c => `
       <tr>
@@ -1700,7 +1364,7 @@ async function loadRecentCalls() {
         <td>${badge(c.outcome, prettyOutcome(c.outcome))}</td>
         <td class="num">${fmtDur(c.duration_seconds)}</td>
         <td class="muted nowrap">${fmtTime(c.timestamp)}</td>
-      </tr>`).join('') || emptyRow(5, 'No calls yet', 'Place your first call from New call.', 'phone');
+      </tr>`).join('') || emptyRow(5, 'No calls yet', 'Place your first call from Campaigns.', 'phone');
   } catch(e) {}
 }
 
@@ -1713,710 +1377,201 @@ async function exportRecentCalls() {
     const csv = [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `t800-calls-${istDateStamp()}.csv`;
+    a.download = `fitcamp-calls-${istDateStamp()}.csv`;
     a.click(); URL.revokeObjectURL(a.href);
     toast(`Exported ${calls.length} calls`);
   } catch(e) { toast('Export failed: ' + e.message, false); }
 }
 
-// ── Single Call ───────────────────────────────────────────────────────────────
-async function dispatchSingleCall() {
-  const phone = document.getElementById('sc-phone').value.trim();
-  if (!phone) { toast('Phone number is required', false); document.getElementById('sc-phone').focus(); return; }
-  await withBusy(document.getElementById('sc-submit'), async () => {
+// ── Campaigns: call one person, or upload a call list ───────────────────────
+const CAMPAIGN_PREFIX = { trial: 'tr', missed_class: 'mc' };
+const listFiles = {};
+
+async function callOne(campaign) {
+  const el = id => document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-${id}`);
+  const phone = el('phone').value.trim();
+  if (!phone) { toast('Phone number is required', false); el('phone').focus(); return; }
+  const name = el('name').value.trim();
+  await withBusy(el('call'), async () => {
     try {
       await api('/call/single', {
         method: 'POST',
         body: JSON.stringify({
-          phone_number: phone,
-          lead_name: document.getElementById('sc-name').value.trim() || 'there',
-          system_prompt: document.getElementById('sc-prompt').value.trim(),
-          campaign_id: document.getElementById('sc-campaign').value,
-          brand_id: document.getElementById('sc-brand').value,
+          phone_number: phone, lead_name: name || 'there', campaign,
+          missed_date: el('missed') ? el('missed').value : '',
         }),
       });
-      toast('Calling ' + phone);
+      toast('Calling ' + (name ? `${name} (${phone})` : phone));
     } catch(e) { toast('Call failed: ' + e.message, false); }
   });
 }
 
-// ── Batch CSV ─────────────────────────────────────────────────────────────────
-let batchFile = null;
-function showBatchFile() {
-  document.getElementById('batch-file-name').innerHTML = batchFile ? icon('file', 'ico-sm') + esc(batchFile.name) : '';
-}
-function onBatchFileSelect(input) {
-  batchFile = input.files[0];
-  showBatchFile();
+function onListFile(campaign, file) {
+  listFiles[campaign] = file || null;
+  document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-file-name`).innerHTML = file ? icon('file', 'ico-sm') + esc(file.name) : '';
 }
 
-async function dispatchBatch() {
-  if (!batchFile) { toast('Choose a CSV file first', false); return; }
+async function uploadList(campaign) {
+  const file = listFiles[campaign];
+  if (!file) { toast('Choose a CSV file first', false); return; }
   const fd = new FormData();
-  fd.append('file', batchFile);
-  fd.append('call_delay_seconds', document.getElementById('bk-delay').value || '3');
-  fd.append('campaign_id', document.getElementById('bk-campaign').value || '');
-  fd.append('brand_id', document.getElementById('bk-brand').value || '');
-  await withBusy(document.getElementById('bk-submit'), async () => {
+  fd.append('file', file);
+  fd.append('campaign', campaign);
+  fd.append('call_delay_seconds', '3');
+  await withBusy(document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-upload`), async () => {
     try {
-      const r = await fetch('/call/batch', { method: 'POST', body: fd });
+      const r = await fetch('/campaigns/upload', { method: 'POST', body: fd });
       if (r.status === 401) { window.location.href = '/login'; return; }
       if (!r.ok) throw new Error(await responseError(r));
       const data = await r.json();
-      document.getElementById('batch-results').innerHTML = `
-        <div class="callout" style="margin:0">${icon('check')}
-          <div><strong>${esc(data.dispatched)}</strong> calls dispatched · <strong>${esc(data.failed)}</strong> failed</div>
-        </div>`;
-      toast(`Batch started — ${data.dispatched} dispatched, ${data.failed} failed`);
-    } catch(e) { toast('Batch failed: ' + e.message, false); }
+      toast(`Calling ${data.contacts_loaded} people from ${file.name}`);
+      onListFile(campaign, null);
+      document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-file`).value = '';
+      loadRuns();
+    } catch(e) { toast('Upload failed: ' + e.message, false); }
   });
 }
 
-const dz = document.getElementById('batch-drop');
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
-dz.addEventListener('drop', e => {
-  e.preventDefault(); dz.classList.remove('drag-over');
-  batchFile = e.dataTransfer.files[0];
-  showBatchFile();
+document.querySelectorAll('.list-drop').forEach(dz => {
+  const campaign = dz.dataset.campaign;
+  const input = document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-file`);
+  dz.addEventListener('click', () => input.click());
+  dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('drag-over');
+    onListFile(campaign, e.dataTransfer.files[0]);
+  });
 });
 
-// ── Campaigns ─────────────────────────────────────────────────────────────────
-async function loadCampaignsIntoSelect(selectId) {
-  const select = document.getElementById(selectId);
-  if (!select) return;
+async function loadRuns() {
   try {
-    const campaigns = await api('/campaigns');
-    const cur = select.value;
-    select.innerHTML = '<option value="">Default script</option>';
-    campaigns.filter(c => c.status === 'active').forEach(c => {
-      const option = document.createElement('option');
-      option.value = c.id;
-      option.textContent = c.name + (c.system_prompt ? '' : ' (script not ready)');
-      option.disabled = !c.system_prompt;
-      select.appendChild(option);
-    });
-    select.value = cur;
-  } catch(e) {
-    toast('Could not load campaigns: ' + e.message, false);
-  }
-}
-
-// ── Brands ──────────────────────────────────────────────────────────────────
-let brandsCache = {};   // id → name, used by the Call Logs / Appointments brand columns
-let brandsFull = {};    // id → full brand object, used by brand-driven form fields
-let brandDefaults = null;   // built-in / generic fallback content for the editor
-const DEFAULT_APPT_TIMES = ['06:00','07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
-
-function _cacheBrands(brands) {
-  brands.forEach(b => { brandsCache[b.id] = b.name; brandsFull[b.id] = b; });
-}
-
-async function ensureBrandDefaults() {
-  if (brandDefaults) return brandDefaults;
-  try { brandDefaults = await api('/brand-defaults'); }
-  catch { brandDefaults = { builtin: {}, generic: {} }; }
-  return brandDefaults;
-}
-
-async function ensureBrands() {
-  if (Object.keys(brandsCache).length) return;
-  try { _cacheBrands(await api('/brands')); } catch(e) {}
-}
-
-function parseBrandBooking(brand) {
-  if (!brand) return {};
-  try { return JSON.parse(brand.booking_config || '{}') || {}; } catch { return {}; }
-}
-
-function updateCharCount(el) {
-  const c = document.getElementById(el.id + '-count');
-  if (c && el.maxLength > 0) c.textContent = `${el.value.length} / ${el.maxLength}`;
-}
-
-// ── Brand booking builder (visual editor for booking_config) ──────────────────
-function _csv(s) { return (s || '').split(',').map(x => x.trim()).filter(Boolean); }
-
-function onSlotModeChange() {
-  const mode = (document.querySelector('input[name="br-slotmode"]:checked') || {}).value || 'fixed';
-  document.getElementById('br-fixed-block').style.display = mode === 'fixed' ? '' : 'none';
-  document.getElementById('br-open-block').style.display  = mode === 'open_hours' ? 'grid' : 'none';
-}
-
-function onResourcesChange() {
-  const has = document.querySelectorAll('#br-res-rows .res-name').length > 0;
-  document.getElementById('br-capacity-group').style.display = has ? 'none' : '';
-}
-
-function onServicesChange() {
-  // When services are defined, each carries its own duration → hide the single
-  // default-duration field (it's only the length for the no-services case).
-  const has = document.querySelectorAll('#br-svc-rows .br-svc-row').length > 0;
-  document.getElementById('br-duration-group').style.display = has ? 'none' : '';
-}
-
-function addServiceRow(name = '', dur = '') {
-  const row = document.createElement('div');
-  row.className = 'br-svc-row dyn-row';
-  row.innerHTML = `<input class="svc-name" placeholder="Service name" value="${esc(name)}" aria-label="Service name" />
-    <input class="svc-dur" type="number" inputmode="numeric" min="5" placeholder="min" value="${dur === '' ? '' : Number(dur)}" aria-label="Minutes" />
-    <button type="button" class="btn btn-ghost btn-icon danger" aria-label="Remove service" onclick="this.parentNode.remove(); onServicesChange()">${icon('x', 'ico-sm')}</button>`;
-  document.getElementById('br-svc-rows').appendChild(row);
-  onServicesChange();
-}
-
-function addResourceRow(name = '') {
-  const row = document.createElement('div');
-  row.className = 'br-res-row dyn-row';
-  row.innerHTML = `<input class="res-name" placeholder="e.g. Asha / Court 1" value="${esc(name)}" aria-label="Resource name" />
-    <button type="button" class="btn btn-ghost btn-icon danger" aria-label="Remove resource" onclick="this.parentNode.remove(); onResourcesChange()">${icon('x', 'ico-sm')}</button>`;
-  document.getElementById('br-res-rows').appendChild(row);
-  onResourcesChange();
-}
-
-function renderBookingBuilder(cfg) {
-  cfg = cfg || {};
-  const slotTimes = cfg.slot_times || [];
-  const openH = cfg.open_hours || {};
-  let mode = String(cfg.slot_mode || '').toLowerCase();
-  if (mode !== 'fixed' && mode !== 'open_hours') mode = (openH.start && !slotTimes.length) ? 'open_hours' : 'fixed';
-  document.querySelectorAll('input[name="br-slotmode"]').forEach(r => { r.checked = (r.value === mode); });
-  document.getElementById('br-slottimes').value = slotTimes.join(', ');
-  document.getElementById('br-open-start').value = openH.start || '';
-  document.getElementById('br-open-end').value = openH.end || '';
-  document.getElementById('br-interval').value = cfg.slot_interval_minutes || 30;
-  document.getElementById('br-duration').value = cfg.duration_minutes || 60;
-  const off = new Set((cfg.off_days || []).map(Number));
-  document.querySelectorAll('.br-off').forEach(c => { c.checked = off.has(Number(c.value)); });
-  document.getElementById('br-locations').value = (cfg.locations || []).join(', ');
-  document.getElementById('br-svc-rows').innerHTML = '';
-  (cfg.services || []).forEach(s => addServiceRow(s.name || '', s.duration_minutes || ''));
-  document.getElementById('br-res-rows').innerHTML = '';
-  (cfg.resources || []).forEach(r => addResourceRow(typeof r === 'string' ? r : (r && r.name) || ''));
-  const cap = cfg.capacity_per_slot;
-  document.getElementById('br-capacity').value = (cap === 0 || cap) ? cap : 1;
-  onSlotModeChange();
-  onResourcesChange();
-  onServicesChange();
-}
-
-function readBookingBuilder() {
-  const mode = (document.querySelector('input[name="br-slotmode"]:checked') || {}).value || 'fixed';
-  const cfg = { slot_mode: mode };
-  const locations = _csv(document.getElementById('br-locations').value).map(x => x.toUpperCase());
-  if (locations.length) cfg.locations = locations;
-  if (mode === 'fixed') {
-    const st = _csv(document.getElementById('br-slottimes').value);
-    if (st.length) cfg.slot_times = st;
-  } else {
-    const start = document.getElementById('br-open-start').value;
-    const end = document.getElementById('br-open-end').value;
-    if (start && end) cfg.open_hours = { start, end };
-    cfg.slot_interval_minutes = Number(document.getElementById('br-interval').value) || 30;
-  }
-  const off = [...document.querySelectorAll('.br-off:checked')].map(c => Number(c.value));
-  if (off.length) cfg.off_days = off;
-  // Default booking length (used when no services; also the fallback for a service row left blank).
-  cfg.duration_minutes = Number(document.getElementById('br-duration').value) || 60;
-  const services = [...document.querySelectorAll('#br-svc-rows .br-svc-row')].map(row => ({
-    name: row.querySelector('.svc-name').value.trim(),
-    duration_minutes: Number(row.querySelector('.svc-dur').value) || 60,
-  })).filter(s => s.name);
-  if (services.length) cfg.services = services;
-  const resources = [...document.querySelectorAll('#br-res-rows .res-name')]
-    .map(i => i.value.trim()).filter(Boolean).map(n => ({ name: n }));
-  if (resources.length) {
-    cfg.resources = resources;
-  } else {
-    const cap = Number(document.getElementById('br-capacity').value);
-    if (!Number.isNaN(cap)) cfg.capacity_per_slot = cap;
-  }
-  return cfg;
-}
-
-function applyBookingJson() {
-  const raw = document.getElementById('br-booking').value.trim();
-  if (!raw) { toast('Paste some JSON first', false); return; }
-  try { renderBookingBuilder(JSON.parse(raw)); toast('JSON applied to the fields above'); }
-  catch { toast('That is not valid JSON', false); }
-}
-
-async function populateBrandFilter(selectId) {
-  await ensureBrands();
-  const sel = document.getElementById(selectId);
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">All brands</option>' +
-    Object.values(brandsFull).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
-  sel.value = cur;
-}
-
-async function loadBrandsIntoSelect(selectId) {
-  const select = document.getElementById(selectId);
-  if (!select) return;
-  const keep = select.querySelector('option[value=""]');
-  const defaultLabel = keep ? keep.textContent : 'Default brand';
-  try {
-    const brands = await api('/brands');
-    const cur = select.value;
-    select.innerHTML = `<option value="">${esc(defaultLabel)}</option>`;
-    brands.forEach(b => {
-      const o = document.createElement('option');
-      o.value = b.id;
-      o.textContent = b.name + (b.is_default ? ' (default)' : '');
-      select.appendChild(o);
-    });
-    select.value = cur;
-  } catch(e) { /* selector is optional */ }
-}
-
-async function loadBrands() {
-  try {
-    const brands = await api('/brands');
-    brandsCache = {}; brandsFull = {};
-    _cacheBrands(brands);
-    const tbody = document.getElementById('brands-body');
-    tbody.innerHTML = brands.map(b => {
-      let nums = [];
-      try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
-      const def = b.is_default
-        ? '<span class="badge badge-default">Default</span>'
-        : `<button class="btn btn-ghost btn-sm" onclick="setBrandDefault(${jsArg(b.id)})">Make default</button>`;
+    const runs = await api('/campaigns');
+    document.getElementById('runs-body').innerHTML = runs.map(r => {
+      const c = r.counts || {};
+      const handled = (c.done || 0) + (c.failed || 0) + (c.skipped || 0) + (c.dialing || 0);
+      const extra = [c.skipped ? `${c.skipped} skipped` : '', c.failed ? `${c.failed} failed` : ''].filter(Boolean).join(' · ');
+      const status = r.status === 'active' ? badge('active', r.running ? 'Calling' : 'Starting') : badge(r.status);
+      const action = r.status === 'active'
+        ? `<button class="btn btn-ghost btn-sm" onclick="setRunStatus(${jsArg(r.id)},'paused')">${icon('pause')}Pause</button>`
+        : (r.status === 'paused' && c.queued
+          ? `<button class="btn btn-ghost btn-sm" onclick="setRunStatus(${jsArg(r.id)},'active')">${icon('play')}Resume</button>` : '');
       return `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td>${esc(b.assistant_name || '—')}</td>
-        <td class="muted">${nums.length ? nums.map(esc).join(', ') : '—'}</td>
-        <td>${def}</td>
-        <td><div class="row-actions">
-          <button class="btn btn-outline btn-sm" onclick="openEditBrandModal(${jsArg(b.id)})">${icon('edit')}Edit</button>
-          <button class="btn btn-ghost btn-icon danger" aria-label="Delete brand" title="Delete" onclick="deleteBrand(${jsArg(b.id)})">${icon('trash')}</button>
+        <td><strong>${esc(r.name)}</strong></td>
+        <td>${campaignBadge(r.kind)}</td>
+        <td class="nowrap">${handled} of ${r.total || 0} called${extra ? `<div class="hint">${esc(extra)}</div>` : ''}</td>
+        <td>${status}</td>
+        <td class="muted nowrap">${fmtTime(r.created_at)}</td>
+        <td><div class="row-actions">${action}
+          <button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete call list" onclick="deleteRun(${jsArg(r.id)})">${icon('trash')}</button>
         </div></td>
       </tr>`;
-    }).join('') || emptyRow(5, 'No brands yet', 'Create your first brand to get started.', 'tag');
-  } catch(e) { toast('Could not load brands: ' + e.message, false); }
+    }).join('') || emptyRow(6, 'No call lists yet', 'Upload a CSV above to call everyone on it.', 'upload');
+  } catch(e) { toast('Could not load call lists: ' + e.message, false); }
 }
 
-function switchBrandTab(name) {
-  document.querySelectorAll('#brand-tabbar .tabbtn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.tab === name);
-  });
-  ['business', 'reception', 'booking', 'advanced'].forEach(t => {
-    const pane = document.getElementById('brtab-' + t);
-    if (pane) pane.classList.toggle('active', t === name);
-  });
-  const body = document.querySelector('#modal-brand .modal-body');
-  if (body) body.scrollTop = 0;
-}
-
-function _setBrandForm(b, def) {
-  def = def || {};
-  document.getElementById('br-edit-id').value = b.id || '';
-  document.getElementById('br-name').value = b.name || '';
-  document.getElementById('br-assistant').value = b.assistant_name || '';
-  document.getElementById('br-voice').value = b.voice || '';
-  document.getElementById('br-model').value = b.model || '';
-  document.getElementById('br-greeting').value = b.greeting || '';
-  let nums = [];
-  try { nums = JSON.parse(b.inbound_numbers || '[]'); } catch {}
-  document.getElementById('br-numbers').value = nums.join(', ');
-  // Empty fields show the effective default so the user can see and customize it.
-  document.getElementById('br-outbound').value = b.outbound_prompt || def.outbound_prompt || '';
-  document.getElementById('br-inbound').value = b.inbound_prompt || def.inbound_prompt || '';
-  document.getElementById('br-context').value = b.business_context || def.business_context || '';
-  let bcfg = {};
-  try { bcfg = JSON.parse(b.booking_config || '{}') || {}; } catch { bcfg = {}; }
-  renderBookingBuilder(bcfg);
-  document.getElementById('br-booking').value = (b.booking_config && b.booking_config !== '{}') ? b.booking_config : '';
-  document.getElementById('br-default').checked = !!b.is_default;
-  document.getElementById('br-describe').value = '';
-  document.getElementById('br-gen-status').textContent = '';
-  document.getElementById('br-feedback').value = '';
-  document.getElementById('br-refine-status').textContent = '';
-  _refineBackup = null;
-  document.getElementById('br-refine-undo').style.display = 'none';
-  ['br-describe', 'br-outbound', 'br-inbound', 'br-context'].forEach(id => {
-    const e = document.getElementById(id); if (e) updateCharCount(e);
-  });
-  // Always open on the Business tab, where the write-up lives.
-  switchBrandTab('business');
-}
-
-async function generateBrandPrompts() {
-  const description = document.getElementById('br-describe').value.trim();
-  if (!description) { toast('Describe the business first', false); return; }
-  const status = document.getElementById('br-gen-status');
-  status.innerHTML = '<span class="spinner"></span> Writing prompts…';
-  try {
-    const r = await api('/brands/generate', { method: 'POST', body: JSON.stringify({
-      description,
-      name: document.getElementById('br-name').value.trim(),
-      assistant_name: document.getElementById('br-assistant').value.trim(),
-    })});
-    if (r.outbound_prompt)  document.getElementById('br-outbound').value = r.outbound_prompt;
-    if (r.inbound_prompt)   document.getElementById('br-inbound').value = r.inbound_prompt;
-    if (r.business_context) document.getElementById('br-context').value = r.business_context;
-    if (r.greeting)         document.getElementById('br-greeting').value = r.greeting;
-    ['br-outbound', 'br-inbound', 'br-context'].forEach(id => updateCharCount(document.getElementById(id)));
-    status.textContent = 'Drafted — facts are below, the script is in Receptionist, outbound style in Advanced. Review, then Save.';
-    toast('Generated — check the Receptionist and Advanced tabs');
-  } catch(e) {
-    status.textContent = '';
-    toast('Generation failed: ' + e.message, false);
-  }
-}
-
-let _refineBackup = null;
-
-async function refineBrandPrompts() {
-  const feedback = document.getElementById('br-feedback').value.trim();
-  if (!feedback) { toast('Type some feedback first', false); return; }
-  const status = document.getElementById('br-refine-status');
-  status.innerHTML = '<span class="spinner"></span> Applying feedback…';
-  // Snapshot the current prompts so a poor refine is one click away from undo.
-  const snapshot = {
-    outbound_prompt: document.getElementById('br-outbound').value,
-    inbound_prompt: document.getElementById('br-inbound').value,
-    business_context: document.getElementById('br-context').value,
-    greeting: document.getElementById('br-greeting').value,
-  };
-  try {
-    const r = await api('/brands/refine', { method: 'POST', body: JSON.stringify({
-      feedback,
-      name: document.getElementById('br-name').value.trim(),
-      assistant_name: document.getElementById('br-assistant').value.trim(),
-      ...snapshot,
-    })});
-    if (typeof r.outbound_prompt === 'string')  { document.getElementById('br-outbound').value = r.outbound_prompt; updateCharCount(document.getElementById('br-outbound')); }
-    if (typeof r.inbound_prompt === 'string')   { document.getElementById('br-inbound').value = r.inbound_prompt; updateCharCount(document.getElementById('br-inbound')); }
-    if (typeof r.business_context === 'string') { document.getElementById('br-context').value = r.business_context; updateCharCount(document.getElementById('br-context')); }
-    if (typeof r.greeting === 'string')         { document.getElementById('br-greeting').value = r.greeting; }
-    document.getElementById('br-feedback').value = '';
-    _refineBackup = snapshot;   // enable Undo
-    document.getElementById('br-refine-undo').style.display = '';
-    status.textContent = 'Updated — review the fields, then Save (or Undo).';
-    toast('Prompts updated');
-  } catch(e) {
-    status.textContent = '';   // failure leaves your prompts untouched
-    toast('Refine failed: ' + e.message, false);
-  }
-}
-
-function undoBrandRefine() {
-  if (!_refineBackup) return;
-  document.getElementById('br-outbound').value = _refineBackup.outbound_prompt;
-  document.getElementById('br-inbound').value = _refineBackup.inbound_prompt;
-  document.getElementById('br-context').value = _refineBackup.business_context;
-  document.getElementById('br-greeting').value = _refineBackup.greeting;
-  ['br-outbound', 'br-inbound', 'br-context'].forEach(id => updateCharCount(document.getElementById(id)));
-  _refineBackup = null;
-  document.getElementById('br-refine-undo').style.display = 'none';
-  document.getElementById('br-refine-status').textContent = 'Reverted to the previous prompts.';
-  toast('Reverted');
-}
-
-async function openNewBrandModal() {
-  await ensureBrandDefaults();
-  document.getElementById('brand-modal-title').textContent = 'New brand';
-  document.getElementById('brand-modal-sub').textContent =
-    "Describe your business once and we'll set up its receptionist, facts and a starter outbound style.";
-  document.getElementById('br-hero-note').innerHTML =
-    "Start here: enter the name, describe your business, and hit <strong>Generate</strong>. We'll write the receptionist script, the business facts and a starter outbound style — all editable afterwards.";
-  // A new brand is non-default until ticked → show the neutral generic defaults.
-  _setBrandForm({}, brandDefaults.generic);
-  openModal('modal-brand');
-}
-
-async function openEditBrandModal(id) {
-  try {
-    await ensureBrandDefaults();
-    const b = await api('/brands/' + id);
-    document.getElementById('brand-modal-title').textContent = 'Edit brand';
-    document.getElementById('brand-modal-sub').textContent =
-      'Edit any field across the tabs, or re-describe the business to regenerate everything.';
-    document.getElementById('br-hero-note').innerHTML =
-      "Editing <strong>" + esc(b.name || 'this brand') + "</strong>. Change fields directly, or type a new description and <strong>Generate</strong> to redraft the receptionist, facts and outbound style.";
-    const def = b.is_default ? brandDefaults.builtin : brandDefaults.generic;
-    _setBrandForm(b, def);
-    openModal('modal-brand');
-  } catch(e) { toast(e.message, false); }
-}
-
-async function saveBrand() {
-  const name = document.getElementById('br-name').value.trim();
-  if (!name) { switchBrandTab('business'); toast('Brand name is required', false); document.getElementById('br-name').focus(); return; }
-  const numbers = document.getElementById('br-numbers').value
-    .split(',').map(s => s.trim()).filter(Boolean);
-  const booking = readBookingBuilder();   // visual builder is the source of truth
-  const payload = {
-    name,
-    assistant_name: document.getElementById('br-assistant').value.trim() || 'Tina',
-    inbound_numbers: numbers,
-    outbound_prompt: document.getElementById('br-outbound').value.trim(),
-    inbound_prompt: document.getElementById('br-inbound').value.trim(),
-    business_context: document.getElementById('br-context').value.trim(),
-    booking_config: JSON.stringify(booking),
-    voice: document.getElementById('br-voice').value,
-    model: document.getElementById('br-model').value,
-    greeting: document.getElementById('br-greeting').value.trim(),
-    is_default: document.getElementById('br-default').checked,
-  };
-  const id = document.getElementById('br-edit-id').value;
-  try {
-    if (id) await api('/brands/' + id, { method: 'PUT', body: JSON.stringify(payload) });
-    else    await api('/brands',       { method: 'POST', body: JSON.stringify(payload) });
-    toast('Brand saved');
-    closeModal('modal-brand');
-    loadBrands();
-  } catch(e) { toast('Save failed: ' + e.message, false); }
-}
-
-async function deleteBrand(id) {
-  const name = brandsCache[id] || 'this brand';
-  if (!confirm(`Delete "${name}"? Existing calls and campaigns keep their history.`)) return;
-  try { await api('/brands/' + id, { method: 'DELETE' }); toast('Brand deleted'); loadBrands(); }
+async function setRunStatus(id, status) {
+  try { await api(`/campaigns/${id}/status`, {method:'PATCH', body:JSON.stringify({status})}); loadRuns(); }
   catch(e) { toast(e.message, false); }
 }
 
-async function setBrandDefault(id) {
-  try { await api(`/brands/${id}/set-default`, { method: 'POST' }); toast('Default brand updated'); loadBrands(); }
-  catch(e) { toast(e.message, false); }
-}
-
-async function loadBrandFilter() {
-  await populateBrandFilter('calls-brand-filter');
-}
-
-function openNewCampaignModal() {
-  document.getElementById('cmp-name').value = '';
-  document.getElementById('cmp-purpose').value = '';
-  loadBrandsIntoSelect('cmp-brand');
-  openModal('modal-campaign');
-  setTimeout(() => document.getElementById('cmp-name').focus(), 50);
-}
-
-async function createCampaign() {
-  const name = document.getElementById('cmp-name').value.trim();
-  if (!name) { toast('Campaign name is required', false); return; }
-
-  const purpose = document.getElementById('cmp-purpose').value.trim();
-  const brand_id = document.getElementById('cmp-brand').value;
-
-  try {
-    await api('/campaigns', {
-      method: 'POST',
-      body: JSON.stringify({ name, purpose, brand_id, contacts: [], schedule_type: 'manual' }),
-    });
-    toast(`Campaign created${purpose ? ' — writing the script…' : ''}`);
-    closeModal('modal-campaign');
-    await loadCampaigns();
-  } catch(e) { toast('Create failed: ' + e.message, false); }
-}
-
-async function submitCampaignFeedback(id) {
-  const el = document.getElementById('fb-' + id);
-  const text = (el && el.value.trim()) || '';
-  if (!text) { toast('Type some feedback first', false); return; }
-  try {
-    await api(`/campaigns/${id}/feedback`, { method: 'POST', body: JSON.stringify({ feedback: text }) });
-    toast('Feedback saved — rewriting the script…');
-    if (el) el.value = '';
-    loadCampaigns();
-  } catch(e) { toast(e.message, false); }
-}
-
-async function loadCampaigns() {
-  try {
-    await ensureBrands();
-    const camps = await api('/campaigns');
-    const el = document.getElementById('campaigns-list');
-    if (!camps.length) {
-      el.innerHTML = `<div class="card" style="grid-column:1/-1"><div class="empty-state">
-        <div class="empty-ico">${icon('megaphone')}</div>
-        <div class="empty-title">No campaigns yet</div>
-        <div class="empty-sub">Create one and the AI will write its call script.</div>
-        <button class="btn btn-primary" style="margin-top:14px" onclick="openNewCampaignModal()">${icon('plus')}New campaign</button>
-      </div></div>`;
-      return;
-    }
-    const PS = {
-      generating: '<span class="spinner"></span> Writing script…',
-      rewriting: '<span class="spinner"></span> Rewriting script…',
-      ready: `<span style="color:var(--success);display:inline-flex">${icon('check', 'ico-xs')}</span> Script ready`,
-      error: `<span style="color:var(--danger);display:inline-flex">${icon('alert', 'ico-xs')}</span> Script failed`,
-    };
-    el.innerHTML = camps.map(c => {
-      const id = esc(c.id);
-      const contacts = (() => { try { return JSON.parse(c.contacts_json || '[]').length; } catch { return '?'; } })();
-      const status = c.prompt_status && PS[c.prompt_status] ? `<div class="camp-status">${PS[c.prompt_status]}</div>` : '';
-      const summary = c.summary
-        ? `<div class="camp-summary"><div class="cap">What the agent knows</div>${esc(c.summary)}</div>`
-        : `<div class="camp-summary muted">${['generating', 'rewriting'].includes(c.prompt_status) ? 'The agent summary is being updated…' : 'No agent summary yet. Add a purpose or feedback to fill in the details.'}</div>`;
-      const schedule = c.schedule_type === 'manual'
-        ? ''
-        : `<span><b>${esc(contacts)}</b> contacts</span><span>${esc(c.schedule_type)}${c.schedule_time ? ' @ ' + esc(c.schedule_time) : ''}</span>`;
-      return `<div class="card camp-card">
-        <div class="camp-top">
-          <div style="min-width:0">
-            <div class="camp-title">${esc(c.name)}</div>
-            <div class="camp-brand">${icon('tag', 'ico-xs')}${esc(brandsCache[c.brand_id] || 'No brand')}</div>
-          </div>
-          ${badge(c.status)}
-        </div>
-        <div class="camp-body">
-          ${summary}
-          <div class="camp-stats">
-            ${schedule}
-            <span><b>${esc(c.total_dispatched || 0)}</b> dispatched</span>
-            <span><b>${esc(c.total_failed || 0)}</b> failed</span>
-            ${c.last_run_at ? `<span>Last run ${fmtTime(c.last_run_at)}</span>` : ''}
-          </div>
-          ${status}
-        </div>
-        <div class="camp-foot">
-          ${c.purpose ? `<input id="fb-${id}" placeholder="Feedback to improve the script…" aria-label="Campaign feedback" onkeydown="if(event.key==='Enter')submitCampaignFeedback(${jsArg(c.id)})" />
-            <button class="btn btn-outline btn-sm" onclick="submitCampaignFeedback(${jsArg(c.id)})">${icon('message')}Apply</button>` : '<span class="grow" style="flex:1"></span>'}
-          <div class="camp-actions">
-            ${c.schedule_type === 'manual' ? '' : `<button class="btn btn-success btn-sm" onclick="runCampaignNow(${jsArg(c.id)})">${icon('play')}Run now</button>`}
-            ${c.status === 'active'
-              ? `<button class="btn btn-ghost btn-icon" title="Pause" aria-label="Pause campaign" onclick="setCampaignStatus(${jsArg(c.id)},'paused')">${icon('pause')}</button>`
-              : `<button class="btn btn-ghost btn-icon" title="Resume" aria-label="Resume campaign" onclick="setCampaignStatus(${jsArg(c.id)},'active')">${icon('play')}</button>`}
-            <button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete campaign" onclick="deleteCampaign(${jsArg(c.id)})">${icon('trash')}</button>
-          </div>
-        </div>
-      </div>`;
-    }).join('');
-  } catch(e) { toast('Could not load campaigns: ' + e.message, false); }
-}
-
-async function runCampaignNow(id) {
-  try { await api(`/campaigns/${id}/run`, {method:'POST'}); toast('Campaign running now'); loadCampaigns(); }
-  catch(e) { toast(e.message, false); }
-}
-
-async function setCampaignStatus(id, status) {
-  try { await api(`/campaigns/${id}/status`, {method:'PATCH', body:JSON.stringify({status})}); loadCampaigns(); }
-  catch(e) { toast(e.message, false); }
-}
-
-async function deleteCampaign(id) {
-  if (!confirm('Delete this campaign?')) return;
-  try { await api(`/campaigns/${id}`, {method:'DELETE'}); toast('Campaign deleted'); loadCampaigns(); }
+async function deleteRun(id) {
+  if (!confirm('Delete this call list? People not yet called will not be called.')) return;
+  try { await api(`/campaigns/${id}`, {method:'DELETE'}); toast('Call list deleted'); loadRuns(); }
   catch(e) { toast(e.message, false); }
 }
 
 // ── Appointments ──────────────────────────────────────────────────────────────
 async function loadAppointments() {
-  await ensureBrands();
   const date = document.getElementById('appt-date-filter').value;
-  const brand = (document.getElementById('appt-brand-filter') || {}).value || '';
-  const q = [];
-  if (date)  q.push('date=' + encodeURIComponent(date));
-  if (brand) q.push('brand_id=' + encodeURIComponent(brand));
   try {
-    const appts = await api('/appointments' + (q.length ? '?' + q.join('&') : ''));
+    const appts = await api('/appointments' + (date ? '?date=' + encodeURIComponent(date) : ''));
     const tbody = document.getElementById('appt-body');
     tbody.innerHTML = appts.map(a => `
       <tr>
         <td><strong>${esc(a.name)}</strong></td>
         <td class="nowrap">${esc(a.date)}</td>
         <td class="nowrap">${esc(a.time)}${a.end_time ? '–' + esc(a.end_time) : ''}</td>
-        <td class="muted">${esc(brandsCache[a.brand_id] || '—')}</td>
-        <td>${esc(a.service || '—')}</td>
         <td>${esc(a.location || '—')}</td>
-        <td>${esc(a.resource || '—')}</td>
         <td class="nowrap">${esc(a.phone)}</td>
-        <td class="nowrap">${esc(a.duration_minutes)} min</td>
         <td>${badge(a.status)}</td>
         <td>${a.status === 'booked' ? `<div class="row-actions"><button class="btn btn-ghost btn-sm danger" onclick="cancelAppt(${jsArg(a.id)})">Cancel</button></div>` : ''}</td>
-      </tr>`).join('') || emptyRow(11, 'No bookings', date ? 'Nothing booked on this date.' : 'Bookings made by the agent will appear here.', 'calendar');
+      </tr>`).join('') || emptyRow(7, 'No trials booked', date ? 'Nothing booked on this date.' : 'Trials booked by Tara will appear here.', 'calendar');
   } catch(e) { toast(e.message, false); }
 }
 
 async function openAddApptModal() {
-  await ensureBrands();
-  document.getElementById('appt-name').value = '';
-  document.getElementById('appt-phone').value = '';
-  document.getElementById('appt-date').value = '';
-  const sel = document.getElementById('appt-brand');
-  const brands = Object.values(brandsFull);
-  sel.innerHTML = brands.length
-    ? brands.map(b => `<option value="${esc(b.id)}"${b.is_default ? ' selected' : ''}>${esc(b.name)}</option>`).join('')
-    : '<option value="">No brands — create one first</option>';
-  onApptBrandChange();
+  try { await ensureBusiness(); } catch(e) { toast(e.message, false); return; }
+  ['appt-name', 'appt-phone', 'appt-date'].forEach(id => { document.getElementById(id).value = ''; });
+  const opts = list => list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  document.getElementById('appt-time').innerHTML = opts(BUSINESS.session_times);
+  document.getElementById('appt-location').innerHTML = opts(BUSINESS.branches);
   openModal('modal-appt');
 }
 
-// Populate service / location / resource / time from the selected brand's config.
-function onApptBrandChange() {
-  const cfg = parseBrandBooking(brandsFull[document.getElementById('appt-brand').value]);
-  const _show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
-
-  // Services
-  const services = (cfg.services || []).filter(s => s && s.name);
-  const svcSel = document.getElementById('appt-service');
-  if (services.length) {
-    _show('appt-service-group', true);
-    svcSel.innerHTML = services.map(s => `<option value="${esc(s.name)}">${esc(s.name)} (${Number(s.duration_minutes) || 60} min)</option>`).join('');
-  } else { _show('appt-service-group', false); svcSel.innerHTML = ''; }
-
-  // Locations
-  const locs = (cfg.locations || []).map(x => String(x).toUpperCase()).filter(Boolean);
-  const locSel = document.getElementById('appt-location');
-  if (locs.length) {
-    _show('appt-location-group', true);
-    locSel.innerHTML = locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
-  } else { _show('appt-location-group', false); locSel.innerHTML = ''; }
-
-  // Resources (named) — include an "Any available" auto-assign option
-  const res = (cfg.resources || []).map(r => typeof r === 'string' ? r : (r && r.name)).filter(Boolean);
-  const resSel = document.getElementById('appt-resource');
-  if (res.length) {
-    _show('appt-resource-group', true);
-    resSel.innerHTML = '<option value="">Any available</option>' + res.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  } else { _show('appt-resource-group', false); resSel.innerHTML = ''; }
-
-  // Time: fixed select vs open-hours free input
-  const slotTimes = cfg.slot_times || [];
-  const oh = cfg.open_hours || {};
-  let mode = String(cfg.slot_mode || '').toLowerCase();
-  if (mode !== 'fixed' && mode !== 'open_hours') mode = (oh.start && !slotTimes.length) ? 'open_hours' : 'fixed';
-  if (mode === 'open_hours') {
-    _show('appt-time-fixed-group', false); _show('appt-time-open-group', true);
-  } else {
-    _show('appt-time-fixed-group', true); _show('appt-time-open-group', false);
-    const times = slotTimes.length ? slotTimes : DEFAULT_APPT_TIMES;
-    document.getElementById('appt-time').innerHTML = times.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
-  }
-}
-
 async function createAppt() {
-  const shown = id => document.getElementById(id).style.display !== 'none';
-  const openMode = shown('appt-time-open-group');
-  const body = {
-    brand_id: document.getElementById('appt-brand').value,
-    name: document.getElementById('appt-name').value.trim(),
-    phone: document.getElementById('appt-phone').value.trim(),
-    date: document.getElementById('appt-date').value,
-    time: openMode ? document.getElementById('appt-time-open').value : document.getElementById('appt-time').value,
-    location: shown('appt-location-group') ? document.getElementById('appt-location').value : '',
-    service: shown('appt-service-group') ? document.getElementById('appt-service').value : '',
-    resource: shown('appt-resource-group') ? document.getElementById('appt-resource').value : '',
-  };
-  if (!body.name || !body.phone || !body.date || !body.time) {
-    toast('Name, phone, date and time are required', false); return;
-  }
+  const body = {};
+  ['name', 'phone', 'date', 'time', 'location'].forEach(f => {
+    body[f] = document.getElementById('appt-' + f).value.trim();
+  });
+  if (Object.values(body).some(v => !v)) { toast('Please fill in every field', false); return; }
   try {
     const r = await api('/appointments', {method:'POST', body:JSON.stringify(body)});
-    toast('Booked — ID ' + r.booking_id);
+    toast('Trial booked — ID ' + r.booking_id);
     closeModal('modal-appt');
     loadAppointments();
   } catch(e) { toast(e.message, false); }
 }
 
 async function cancelAppt(id) {
-  if (!confirm('Cancel this appointment?')) return;
-  try { await api(`/appointments/${id}`, {method:'DELETE'}); toast('Appointment cancelled'); loadAppointments(); }
+  if (!confirm('Cancel this trial booking?')) return;
+  try { await api(`/appointments/${id}`, {method:'DELETE'}); toast('Booking cancelled'); loadAppointments(); }
   catch(e) { toast(e.message, false); }
+}
+
+// ── Missed classes ────────────────────────────────────────────────────────────
+let missedRows = [];
+
+async function loadMissed() {
+  try {
+    await ensureBusiness();
+    missedRows = await api('/missed-classes');
+    const counts = {};
+    missedRows.forEach(m => { const k = m.reason_category || 'other'; counts[k] = (counts[k] || 0) + 1; });
+    document.getElementById('missed-summary').innerHTML = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `<span class="badge badge-${esc(k)}">${esc(reasonLabel(k))} <b>${n}</b></span>`).join('');
+    document.getElementById('missed-body').innerHTML = missedRows.map(m => `
+      <tr>
+        <td><strong>${esc(m.member_name && m.member_name !== 'there' ? m.member_name : '—')}</strong></td>
+        <td class="nowrap">${esc(m.phone_number)}</td>
+        <td class="nowrap">${esc(m.missed_date || '—')}</td>
+        <td>${badge(m.reason_category, reasonLabel(m.reason_category))}</td>
+        <td>${esc(m.reason || '—')}</td>
+        <td>${esc(m.coming_back || '—')}</td>
+        <td class="muted nowrap">${fmtTime(m.created_at)}</td>
+        <td><div class="row-actions"><button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete record" onclick="deleteMissed(${jsArg(m.id)})">${icon('trash')}</button></div></td>
+      </tr>`).join('') || emptyRow(8, 'No reasons recorded yet', 'Run the Missed class campaign and the reasons members give will appear here.', 'calendar-x');
+  } catch(e) { toast('Could not load missed classes: ' + e.message, false); }
+}
+
+async function deleteMissed(id) {
+  if (!confirm('Delete this record?')) return;
+  try { await api(`/missed-classes/${id}`, {method:'DELETE'}); loadMissed(); }
+  catch(e) { toast(e.message, false); }
+}
+
+function exportMissed() {
+  if (!missedRows.length) { toast('Nothing to export', false); return; }
+  const head = ['Called', 'Member', 'Phone', 'Missed on', 'Reason', 'In their words', 'Coming back'];
+  const rows = missedRows.map(m => [fmtTime(m.created_at), m.member_name || '', m.phone_number || '', m.missed_date || '',
+    reasonLabel(m.reason_category), m.reason || '', m.coming_back || '']);
+  const csv = [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `missed-classes-${istDateStamp()}.csv`;
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 // ── Call Logs ─────────────────────────────────────────────────────────────────
@@ -2427,9 +1582,8 @@ let callsById = {};
 async function loadCalls(page=1) {
   callsPage = page;
   try {
-    await ensureBrands();
-    const brandFilter = (document.getElementById('calls-brand-filter') || {}).value || '';
-    const calls = await api(`/calls?page=${page}&limit=20${brandFilter ? '&brand_id=' + encodeURIComponent(brandFilter) : ''}`);
+    const campaign = document.getElementById('calls-campaign-filter').value;
+    const calls = await api(`/calls?page=${page}&limit=20${campaign ? '&campaign=' + encodeURIComponent(campaign) : ''}`);
     callsById = {};
     calls.forEach(c => { callsById[c.id] = c; });
     const tbody = document.getElementById('calls-body');
@@ -2439,7 +1593,7 @@ async function loadCalls(page=1) {
         <td class="nowrap">${esc(c.phone_number)}</td>
         <td>${badge(c.outcome, prettyOutcome(c.outcome))}</td>
         <td class="nowrap">${fmtDur(c.duration_seconds)}</td>
-        <td class="muted">${esc(brandsCache[c.brand_id] || '—')}</td>
+        <td>${campaignBadge(c.campaign)}</td>
         <td class="muted nowrap">${fmtTime(c.timestamp)}</td>
         <td><input class="inline-note" value="${esc(c.notes || '')}" onblur="patchNotes(${jsArg(c.id)},this.value)" placeholder="Add note…" aria-label="Notes" /></td>
         <td>${c.transcript ? `<button class="btn btn-ghost btn-sm" onclick="viewTranscript(${jsArg(c.id)})">${icon('file')}View</button>` : '<span class="muted">—</span>'}</td>
@@ -2564,107 +1718,6 @@ async function addMemoryNote() {
   } catch(e) { toast(e.message, false); }
 }
 
-// ── Agent Profiles ────────────────────────────────────────────────────────────
-const ALL_TOOLS = ['check_availability','book_appointment','end_call','transfer_to_human','send_sms_confirmation','remember_details','book_calcom','cancel_calcom'];
-let profilesById = {};
-
-async function loadProfiles() {
-  try {
-    const profiles = await api('/agent-profiles');
-    profilesById = {};
-    profiles.forEach(p => { profilesById[p.id] = p; });
-    const el = document.getElementById('profiles-grid');
-    if (!profiles.length) {
-      el.innerHTML = `<div class="card" style="grid-column:1/-1"><div class="empty-state"><div class="empty-ico">${icon('bot')}</div><div class="empty-title">No profiles yet</div></div></div>`;
-      return;
-    }
-    el.innerHTML = profiles.map(p => `
-      <div class="profile-card${p.is_default ? ' default-profile' : ''}">
-        ${p.is_default ? '<span class="badge badge-default default-badge">Default</span>' : ''}
-        <div class="profile-name">${esc(p.name)}</div>
-        <div class="profile-meta">
-          Voice: ${esc(p.voice)}<br>
-          Model: <span class="mono" style="font-size:12px">${esc(p.model)}</span><br>
-          Created ${fmtTime(p.created_at)}
-        </div>
-        <div class="profile-actions">
-          <button class="btn btn-outline btn-sm" onclick="openEditProfileModal(profilesById[${jsArg(p.id)}])">${icon('edit')}Edit</button>
-          ${!p.is_default ? `<button class="btn btn-ghost btn-sm" onclick="setDefaultProfile(${jsArg(p.id)})">${icon('star')}Make default</button>` : ''}
-          <button class="btn btn-ghost btn-icon danger" aria-label="Delete profile" onclick="deleteProfile(${jsArg(p.id)})">${icon('trash')}</button>
-        </div>
-      </div>`).join('');
-  } catch(e) { toast(e.message, false); }
-}
-
-function buildToolCheckboxes(selected=[]) {
-  return ALL_TOOLS.map(t => `
-    <label class="tool-check">
-      <input type="checkbox" name="tool" value="${t}" ${!selected.length || selected.includes(t) ? 'checked' : ''} />
-      ${t}
-    </label>`).join('');
-}
-
-function openNewProfileModal() {
-  document.getElementById('profile-modal-title').textContent = 'New agent profile';
-  document.getElementById('profile-edit-id').value = '';
-  document.getElementById('pr-name').value = '';
-  document.getElementById('pr-voice').value = 'Aoede';
-  document.getElementById('pr-model').value = 'gemini-3.1-flash-live-preview';
-  document.getElementById('pr-prompt').value = '';
-  document.getElementById('pr-default').checked = false;
-  document.getElementById('tools-checkboxes').innerHTML = buildToolCheckboxes();
-  openModal('modal-profile');
-}
-
-function openEditProfileModal(p) {
-  document.getElementById('profile-modal-title').textContent = 'Edit profile';
-  document.getElementById('profile-edit-id').value = p.id;
-  document.getElementById('pr-name').value = p.name;
-  document.getElementById('pr-voice').value = p.voice;
-  document.getElementById('pr-model').value = p.model;
-  document.getElementById('pr-prompt').value = p.system_prompt || '';
-  document.getElementById('pr-default').checked = !!p.is_default;
-  let tools = [];
-  try { tools = JSON.parse(p.enabled_tools || '[]'); } catch {}
-  document.getElementById('tools-checkboxes').innerHTML = buildToolCheckboxes(tools);
-  openModal('modal-profile');
-}
-
-async function saveProfile() {
-  const id = document.getElementById('profile-edit-id').value;
-  const name = document.getElementById('pr-name').value.trim();
-  if (!name) { toast('Profile name is required', false); return; }
-  const checked = [...document.querySelectorAll('#tools-checkboxes input[type=checkbox]:checked')].map(x => x.value);
-  const body = {
-    name, voice: document.getElementById('pr-voice').value,
-    model: document.getElementById('pr-model').value,
-    system_prompt: document.getElementById('pr-prompt').value.trim() || null,
-    enabled_tools: checked,
-    is_default: document.getElementById('pr-default').checked,
-  };
-  try {
-    if (id) {
-      await api(`/agent-profiles/${id}`, {method:'PUT', body:JSON.stringify(body)});
-    } else {
-      await api('/agent-profiles', {method:'POST', body:JSON.stringify(body)});
-    }
-    toast('Profile saved');
-    closeModal('modal-profile');
-    loadProfiles();
-  } catch(e) { toast(e.message, false); }
-}
-
-async function setDefaultProfile(id) {
-  try { await api(`/agent-profiles/${id}/set-default`, {method:'POST'}); toast('Default updated'); loadProfiles(); }
-  catch(e) { toast(e.message, false); }
-}
-
-async function deleteProfile(id) {
-  if (!confirm('Delete this profile?')) return;
-  try { await api(`/agent-profiles/${id}`, {method:'DELETE'}); toast('Profile deleted'); loadProfiles(); }
-  catch(e) { toast(e.message, false); }
-}
-
 // ── Settings ──────────────────────────────────────────────────────────────────
 const SETTINGS_SCHEMA = [
   { section: 'LiveKit Cloud', keys: [
@@ -2696,11 +1749,6 @@ const SETTINGS_SCHEMA = [
     { key:'TWILIO_ACCOUNT_SID', label:'Account SID', desc:'ACxxx…' },
     { key:'TWILIO_AUTH_TOKEN',  label:'Auth Token',  desc:'xxx…', secret:true },
     { key:'TWILIO_FROM_NUMBER', label:'From Number', desc:'+1234567890' },
-  ]},
-  { section: 'Cal.com (optional)', keys: [
-    { key:'CALCOM_API_KEY',       label:'API Key',       desc:'cal_live_xxx…', secret:true },
-    { key:'CALCOM_EVENT_TYPE_ID', label:'Event Type ID', desc:'123456' },
-    { key:'CALCOM_TIMEZONE',      label:'Timezone',      desc:'Asia/Kolkata' },
   ]},
   { section: 'S3 / Storage (optional)', keys: [
     { key:'S3_ACCESS_KEY_ID',     label:'Access Key ID',    desc:'' },

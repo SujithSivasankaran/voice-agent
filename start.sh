@@ -8,6 +8,10 @@ echo "==> T-800 starting up"
 echo "    LiveKit : ${LIVEKIT_URL}"
 echo "    Gemini  : ${GEMINI_MODEL:-gemini-3.1-flash-live-preview}"
 echo "    Supabase: ${SUPABASE_URL}"
+echo "    TZ      : ${APP_TIMEZONE:-Asia/Kolkata}"
+
+echo "==> Applying database migrations"
+python migrate.py || echo "    (migrations skipped or failed — see logs above)"
 
 echo "==> FastAPI on :8000"
 uvicorn server:app --host 0.0.0.0 --port 8000 &

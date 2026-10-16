@@ -10,6 +10,7 @@ python-multipart>=0.0.9
 bcrypt>=4.1.0
 itsdangerous>=2.1.0
 supabase>=2.0.0
+psycopg2-binary>=2.9.0
 httpx>=0.25.0
 python-dotenv>=1.0.0
 apscheduler>=3.10.0,<4.0.0

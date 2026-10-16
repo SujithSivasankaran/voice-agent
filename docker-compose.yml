@@ -1,0 +1,35 @@
+# Per-customer deployment: two services from ONE image so the web/API and the voice
+# agent worker scale and restart independently. Both read the same environment (one
+# .env or the platform's injected vars). The web service owns migrations; the agent
+# waits for it to become healthy before starting.
+#
+#   docker compose up -d --build
+#   docker compose up -d --scale agent=3   # more concurrent voice capacity
+#
+# For a single-box legacy deployment you can still run the combined start.sh instead.
+
+services:
+  web:
+    build: .
+    image: outboundai:latest
+    command: ["sh", "start-web.sh"]
+    env_file: .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  agent:
+    # Reuse the image the web service builds; no second build.
+    image: outboundai:latest
+    command: ["sh", "start-agent.sh"]
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy

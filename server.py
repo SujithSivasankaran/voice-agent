@@ -6,39 +6,35 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
 
-import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 # load_dotenv(override=False) is a local-dev convenience only.
 # On the VPS, Coolify injects env vars before process start, so this is a no-op.
 load_dotenv(override=False)
 
-from db import (
-    init_db, log_error,
-    get_all_settings, save_settings, get_setting, set_setting,
-    get_errors, get_logs, clear_errors,
-    TrialSlotUnavailable, insert_trial, get_all_trials, cancel_trial,
-    get_next_available_trial_slots,
-    get_all_calls, get_call, update_call_notes, get_contacts, get_calls_by_phone,
-    get_stats, get_brand_breakdown,
-    create_campaign, get_all_campaigns, get_campaign, update_campaign_status,
-    update_campaign_run_stats, delete_campaign,
-    get_active_campaigns, update_campaign_generated, set_campaign_prompt_status,
-    append_campaign_feedback,
-    get_contact_memory, add_contact_memory,
-    get_all_agent_profiles, get_agent_profile, get_default_agent_profile, create_agent_profile,
-    update_agent_profile, delete_agent_profile, set_default_agent_profile,
-    get_all_brands, get_brand, get_default_brand, create_brand,
-    update_brand, delete_brand, set_default_brand,
+from business import (
+    ASSISTANT_NAME, BRANCHES, BUSINESS_NAME, CAMPAIGNS, MISSED_CLASS, MISSED_REASONS,
+    SESSION_TIMES, TRIAL, campaign_or_default,
 )
+from db import (
+    init_db, log_error, now_local, get_all_settings, get_logs, clear_errors,
+    TrialSlotUnavailable, book_trial, get_all_trials, cancel_trial, next_free_trial_slots,
+    get_all_calls, get_call, update_call_notes, get_contacts, get_calls_by_phone, get_stats,
+    get_missed_classes, delete_missed_class,
+    create_call_run, get_call_runs, get_call_run, update_call_run_status, pause_interrupted_runs,
+    finish_call_run, delete_call_run,
+    create_campaign_contacts, get_pending_campaign_contacts, claim_campaign_contact,
+    mark_campaign_contact, count_campaign_contacts_by_status,
+    get_contact_memory, add_contact_memory,
+    add_dnc, remove_dnc, list_dnc, get_month_to_date_spend,
+)
+import compliance
 from observability import langfuse_status
 from recordings import presigned_recording_url, recording_sync_status, sync_vobiz_recordings
 import auth
@@ -91,11 +87,69 @@ async def require_login(request: Request, call_next):
 
 # ── APScheduler ───────────────────────────────────────────────────────────────
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 
 scheduler = AsyncIOScheduler()
-_scheduled_campaign_jobs: dict = {}
+
+
+# ── Dispatch concurrency + spend guards ───────────────────────────────────────
+# Bound the number of calls dispatched at once so a large CSV/campaign cannot blow
+# past the SIP trunk's channel count and the model quota, causing mass failures.
+try:
+    _MAX_CONCURRENT_DISPATCH = max(1, int(os.environ.get("MAX_CONCURRENT_DISPATCH", "5")))
+except ValueError:
+    _MAX_CONCURRENT_DISPATCH = 5
+_dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_DISPATCH)
+
+# Monthly hard spend cap (USD) across the instance. 0 => unlimited. Since we host
+# and front telephony/model costs, this stops a runaway campaign. Spend is cached
+# briefly to avoid summing call_logs on every single dial.
+try:
+    _MONTHLY_SPEND_CAP_USD = float(os.environ.get("MONTHLY_SPEND_CAP_USD", "0") or 0)
+except ValueError:
+    _MONTHLY_SPEND_CAP_USD = 0.0
+_spend_cache: dict = {"value": 0.0, "at": 0.0}
+_SPEND_CACHE_TTL = 60.0
+
+
+async def _over_spend_cap() -> bool:
+    """True if this month's spend has reached the cap. Cached for _SPEND_CACHE_TTL."""
+    if _MONTHLY_SPEND_CAP_USD <= 0:
+        return False
+    import time as _t
+    now = _t.monotonic()
+    if now - _spend_cache["at"] > _SPEND_CACHE_TTL:
+        try:
+            _spend_cache["value"] = await get_month_to_date_spend()
+        except Exception as exc:
+            logger.warning("Spend-cap lookup failed (allowing call): %s", exc)
+            return False
+        _spend_cache["at"] = now
+    return _spend_cache["value"] >= _MONTHLY_SPEND_CAP_USD
+
+
+async def dispatch_guarded(phone: str, lead_name: str, meta: dict) -> str:
+    """Pre-dial compliance/spend/concurrency gate around _dispatch_call.
+
+    Returns one of: 'dispatched' | 'failed' | 'suppressed' | 'blocked_window'
+    | 'spend_cap'. Callers map these to per-contact status / single-call errors.
+    """
+    # 1. Do-Not-Call + calling-window (respects APP_TIMEZONE).
+    ok, reason = await compliance.check_dialable(phone)
+    if not ok:
+        logger.info("Skipping %s — %s", phone, reason)
+        await log_error("server", f"Call skipped: {reason}", f"phone={phone}", "warning")
+        return "suppressed" if "Do-Not-Call" in reason else "blocked_window"
+
+    # 2. Monthly spend cap.
+    if await _over_spend_cap():
+        logger.warning("Monthly spend cap reached — refusing to dial %s", phone)
+        await log_error("server", "Monthly spend cap reached — call refused", f"phone={phone}", "warning")
+        return "spend_cap"
+
+    # 3. Bounded concurrency around the actual LiveKit dispatch.
+    async with _dispatch_semaphore:
+        ok = await _dispatch_call(phone, lead_name, meta)
+    return "dispatched" if ok else "failed"
 
 
 # ── LiveKit dispatch helper ───────────────────────────────────────────────────
@@ -141,290 +195,94 @@ async def _dispatch_call(phone: str, lead_name: str, meta: dict) -> bool:
         return False
 
 
-# ── Campaign prompt generation (background, LLM) ───────────────────────────────
+# ── Call-list runner ──────────────────────────────────────────────────────────
+# Each uploaded list is a "run" of one of the two campaigns. Contacts are claimed
+# one at a time (queued → dialing → done/failed/skipped), so a paused or
+# interrupted run resumes where it left off and nobody is called twice.
 
-async def _gemini_json(instr: str) -> Optional[dict]:
-    """Call Gemini and return a parsed JSON object, robustly.
-
-    Uses JSON response mode (so the model can't wrap output in prose/markdown) and
-    a generous output-token limit (so long drafts aren't truncated into invalid
-    JSON), with a couple of retries for transient API errors. Returns None on
-    failure. This is the shared path for brand/campaign prompt generation, which
-    otherwise failed intermittently on malformed or truncated JSON."""
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key:
-        return None
-    import google.genai as genai
-    model = os.environ.get("CAMPAIGN_GEN_MODEL", "gemini-2.5-flash")
-    client = genai.Client(api_key=api_key)
-    # Build a JSON-mode config when the SDK supports it; fall back to plain text.
-    config = None
-    try:
-        from google.genai import types as gtypes
-        config = gtypes.GenerateContentConfig(
-            response_mime_type="application/json", max_output_tokens=8192, temperature=0.7,
-        )
-    except Exception:
-        config = None
-    loop = asyncio.get_event_loop()
-
-    def _call():
-        if config is not None:
-            return client.models.generate_content(model=model, contents=instr, config=config)
-        return client.models.generate_content(model=model, contents=instr)
-
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = await loop.run_in_executor(None, _call)
-            text = (getattr(resp, "text", "") or "").strip()
-            start, end = text.find("{"), text.rfind("}")
-            if start >= 0 and end > start:
-                return json.loads(text[start:end + 1])
-            last_err = "model returned no JSON object"
-        except Exception as exc:
-            last_err = str(exc)
-        if attempt < 2:
-            await asyncio.sleep(0.6 * (attempt + 1))
-    logger.warning("Gemini JSON generation failed after retries: %s", last_err)
-    return None
+_running: set = set()
+_tasks: set = set()  # strong refs so background runs are not garbage-collected
 
 
-async def _generate_campaign_assets(name: str, purpose: str, feedback_items: list, default_base: str = None):
-    """Turn a campaign's purpose (+ cumulative feedback) into a full outbound script
-    and a short summary, via the LLM. Returns (prompt, summary) or (None, None).
-    default_base is the brand's outbound script used as the style reference."""
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key or not purpose:
-        return None, None
-    from prompts import CAMPAIGN_GEN_INSTRUCTIONS, GENERIC_OUTBOUND_PROMPT
-    fb = "\n".join(f"- {f.get('text','')}" for f in (feedback_items or [])) or "(none yet)"
-    base = (default_base or GENERIC_OUTBOUND_PROMPT)[:2200]
-    instr = CAMPAIGN_GEN_INSTRUCTIONS.format(
-        default_base=base, name=name, purpose=purpose, feedback=fb,
-    )
-    data = await _gemini_json(instr)
-    if data:
-        return data.get("prompt"), data.get("summary")
-    await log_error("server", "Campaign prompt generation failed", name, "error")
-    return None, None
+def _start_run(run_id: str) -> None:
+    """Start the runner for a list in the background, unless it is already running."""
+    if run_id not in _running:
+        task = asyncio.create_task(_run_list(run_id))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
 
 
-async def _generate_brand_assets(description: str, brand_name: str, assistant_name: str) -> dict:
-    """Turn a plain-English business description into the brand's three editable
-    prompt fields via the LLM. Returns {} on failure."""
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key or not description:
-        return {}
-    from prompts import BRAND_GEN_INSTRUCTIONS
-    instr = BRAND_GEN_INSTRUCTIONS.format(
-        description=description,
-        brand_name=brand_name or "the business",
-        assistant_name=assistant_name or "the assistant",
-    )
-    data = await _gemini_json(instr)
-    if data:
-        return {
-            "business_context": (data.get("business_context") or "").strip(),
-            "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
-            "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
-            "greeting": (data.get("greeting") or "").strip(),
-        }
-    await log_error("server", "Brand prompt generation failed", brand_name, "error")
-    return {}
-
-
-async def _refine_brand_assets(feedback: str, current: dict, brand_name: str, assistant_name: str) -> dict:
-    """Apply plain-English feedback to a brand's existing prompts via the LLM.
-    Returns the revised {business_context, outbound_prompt, inbound_prompt} or {}."""
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key or not feedback:
-        return {}
-    from prompts import BRAND_REFINE_INSTRUCTIONS
-    instr = BRAND_REFINE_INSTRUCTIONS.format(
-        feedback=feedback,
-        brand_name=brand_name or "the business",
-        assistant_name=assistant_name or "the assistant",
-        business_context=current.get("business_context") or "(none)",
-        outbound_prompt=current.get("outbound_prompt") or "(none)",
-        inbound_prompt=current.get("inbound_prompt") or "(none)",
-        greeting=current.get("greeting") or "(none)",
-    )
-    data = await _gemini_json(instr)
-    if data:
-        return {
-            "business_context": (data.get("business_context") or "").strip(),
-            "outbound_prompt": (data.get("outbound_prompt") or "").strip(),
-            "inbound_prompt": (data.get("inbound_prompt") or "").strip(),
-            "greeting": (data.get("greeting") or "").strip(),
-        }
-    await log_error("server", "Brand prompt refine failed", brand_name, "error")
-    return {}
-
-
-async def _regenerate_campaign(campaign_id: str, pending_status: str = "generating") -> None:
-    """Background task: (re)generate a campaign's outbound prompt + summary."""
-    c = await get_campaign(campaign_id)
-    if not c or not c.get("purpose"):
+async def _run_list(run_id: str) -> None:
+    if run_id in _running:
         return
-    await set_campaign_prompt_status(campaign_id, pending_status)
-    feedback = []
-    if c.get("feedback"):
-        try:
-            feedback = json.loads(c["feedback"])
-        except Exception:
-            feedback = []
-    # Use the campaign's brand outbound script as the style reference, so
-    # generated scripts match that brand rather than the neutral generic default.
-    brand_base = None
-    if c.get("brand_id"):
-        try:
-            brand = await get_brand(c["brand_id"])
-            brand_base = (brand or {}).get("outbound_prompt") or None
-        except Exception:
-            brand_base = None
-    prompt, summary = await _generate_campaign_assets(
-        c.get("name", ""), c.get("purpose", ""), feedback, brand_base,
-    )
-    if prompt:
-        await update_campaign_generated(campaign_id, prompt, summary or "", "ready")
-        logger.info("Campaign %s prompt regenerated", campaign_id)
-    else:
-        await set_campaign_prompt_status(campaign_id, "error")
-
-
-# ── Campaign runner ───────────────────────────────────────────────────────────
-
-async def _assemble_campaign_call_prompt(campaign: dict) -> str:
-    """Compact primary campaign prompt; other campaigns are fetched on demand."""
-    from prompts import assemble_outbound_prompt
-    return assemble_outbound_prompt(
-        campaign.get("name") or "Campaign",
-        campaign.get("summary") or "",
-        campaign.get("purpose") or "",
-    )
-
-
-async def _default_outbound_profile_id() -> Optional[str]:
-    """The profile marked default is authoritative for every outbound call."""
+    _running.add(run_id)
     try:
-        profile = await get_default_agent_profile()
-        return profile.get("id") if profile else None
+        await _run_list_inner(run_id)
     except Exception as exc:
-        logger.warning("Could not load default outbound agent profile: %s", exc)
-        return None
+        logger.exception("Call list %s crashed", run_id)
+        await log_error("server", f"Call list stopped with an error: {exc}", run_id, "error")
+        await update_call_run_status(run_id, "paused")
+    finally:
+        _running.discard(run_id)
 
 
-async def _resolve_call_brand_id(brand_id: Optional[str]) -> Optional[str]:
-    """Validate a chosen brand id, else fall back to the default brand's id."""
-    if brand_id:
-        try:
-            brand = await get_brand(brand_id)
-            if brand:
-                return brand["id"]
-        except Exception as exc:
-            logger.warning("Could not load brand %s: %s", brand_id, exc)
-    try:
-        brand = await get_default_brand()
-        return brand["id"] if brand else None
-    except Exception as exc:
-        logger.warning("Could not load default brand: %s", exc)
-        return None
-
-async def _run_campaign(campaign_id: str) -> None:
-    campaign = await get_campaign(campaign_id)
-    if not campaign:
-        logger.warning("Campaign %s not found", campaign_id)
+async def _run_list_inner(run_id: str) -> None:
+    run = await get_call_run(run_id)
+    if not run or run.get("status") != "active":
         return
-    if campaign.get("status") == "paused":
-        logger.info("Campaign %s is paused — skipping run", campaign_id)
-        return
+    campaign = campaign_or_default(run.get("kind"))
+    delay = run.get("call_delay_seconds")
+    delay = 3 if delay is None else int(delay)
+    await log_error("server", f"Call list started: {run.get('name')}", run_id, "info")
 
-    logger.info("Running campaign: %s", campaign.get("name"))
-    await log_error("server", f"Campaign started: {campaign.get('name')}", campaign_id, "info")
-
-    try:
-        contacts = json.loads(campaign.get("contacts_json", "[]"))
-    except Exception:
-        contacts = []
-
-    delay = int(campaign.get("call_delay_seconds", 3))
-    agent_profile_id = await _default_outbound_profile_id()
-    brand_id = await _resolve_call_brand_id(campaign.get("brand_id"))
-
-    base_prompt = campaign.get("system_prompt")
-    custom_prompt = await _assemble_campaign_call_prompt(campaign) if base_prompt else None
-
-    dispatched = 0
-    failed = 0
-
-    for contact in contacts:
-        phone = contact.get("phone", "").strip()
-        name  = contact.get("name", "there").strip()
-        if not phone:
-            failed += 1
+    dispatched = failed = skipped = 0
+    stopped = False
+    for contact in await get_pending_campaign_contacts(run_id):
+        # Re-check between contacts so a pause takes effect promptly.
+        latest = await get_call_run(run_id)
+        if not latest or latest.get("status") != "active":
+            stopped = True
+            break
+        if not await claim_campaign_contact(contact["id"]):
             continue
 
-        extra: dict = {}
-        if custom_prompt:
-            extra["system_prompt"] = custom_prompt
-        if agent_profile_id:
-            extra["agent_profile_id"] = agent_profile_id
-        if brand_id:
-            extra["brand_id"] = brand_id
-
-        ok = await _dispatch_call(phone, name, extra)
-        if ok:
+        meta = {"campaign": campaign, "campaign_id": run_id}
+        if contact.get("missed_date"):
+            meta["missed_date"] = contact["missed_date"]
+        result = await dispatch_guarded(
+            (contact.get("phone_number") or "").strip(),
+            (contact.get("lead_name") or "there").strip(),
+            meta,
+        )
+        if result == "dispatched":
             dispatched += 1
+            await mark_campaign_contact(contact["id"], "done", outcome="dispatched")
+        elif result == "spend_cap":
+            # Stop the whole run; leave this contact queued so a resume retries it.
+            await mark_campaign_contact(contact["id"], "queued", skip_reason="spend_cap")
+            await update_call_run_status(run_id, "paused")
+            logger.warning("Call list %s paused — monthly spend cap reached", run_id)
+            stopped = True
+            break
+        elif result in ("suppressed", "blocked_window"):
+            skipped += 1
+            await mark_campaign_contact(contact["id"], "skipped", skip_reason=result)
         else:
             failed += 1
+            await mark_campaign_contact(contact["id"], "failed", outcome="dispatch_failed")
 
         if delay > 0:
             await asyncio.sleep(delay)
 
-    await update_campaign_run_stats(campaign_id, dispatched, failed)
-    logger.info("Campaign %s done — dispatched=%d failed=%d", campaign_id, dispatched, failed)
-    await log_error("server", f"Campaign complete: dispatched={dispatched} failed={failed}", campaign_id, "info")
-
-
-def _schedule_campaign(campaign: dict) -> None:
-    cid = campaign["id"]
-    schedule_type = campaign.get("schedule_type", "once")
-    schedule_time = campaign.get("schedule_time", "09:00")
-
-    # Remove old job if any
-    if cid in _scheduled_campaign_jobs:
-        try:
-            scheduler.remove_job(_scheduled_campaign_jobs[cid])
-        except Exception:
-            pass
-
-    try:
-        hour, minute = map(int, schedule_time.split(":"))
-    except Exception:
-        hour, minute = 9, 0
-
-    if schedule_type == "once":
-        job = scheduler.add_job(
-            _run_campaign, DateTrigger(run_date=datetime.now()),
-            args=[cid], id=f"campaign_{cid}",
-        )
-    elif schedule_type == "daily":
-        job = scheduler.add_job(
-            _run_campaign, CronTrigger(hour=hour, minute=minute),
-            args=[cid], id=f"campaign_{cid}",
-        )
-    elif schedule_type == "weekdays":
-        job = scheduler.add_job(
-            _run_campaign, CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute),
-            args=[cid], id=f"campaign_{cid}",
-        )
-    else:
-        return
-
-    _scheduled_campaign_jobs[cid] = f"campaign_{cid}"
-    logger.info("Scheduled campaign %s (%s at %02d:%02d)", cid, schedule_type, hour, minute)
-
+    counts = await count_campaign_contacts_by_status(run_id)
+    remaining = counts.get("queued", 0)
+    if not stopped and remaining == 0:
+        await finish_call_run(run_id, counts.get("done", 0), counts.get("failed", 0))
+    await log_error(
+        "server",
+        f"Call list run: dispatched={dispatched} failed={failed} skipped={skipped} remaining={remaining}",
+        run_id, "info",
+    )
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
 
@@ -450,14 +308,13 @@ async def startup():
         replace_existing=True,
         next_run_time=datetime.now(),
     )
-    # Re-schedule any active campaigns on restart
+    # A restart interrupts any list that was mid-run; show it as paused so it can be resumed.
     try:
-        campaigns = await get_all_campaigns()
-        for c in campaigns:
-            if c.get("status") == "active" and c.get("schedule_type") != "once":
-                _schedule_campaign(c)
+        interrupted = await pause_interrupted_runs()
+        if interrupted:
+            logger.info("Paused %d call list(s) interrupted by the restart", interrupted)
     except Exception as exc:
-        logger.warning("Could not restore campaign schedules: %s", exc)
+        logger.warning("Could not pause interrupted call lists: %s", exc)
 
 
 @app.on_event("shutdown")
@@ -557,9 +414,11 @@ async def root():
 
 @app.get("/health")
 async def health():
+    from db import APP_TIMEZONE
     return {
         "status": "ok",
-        "timestamp": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
+        "timestamp": now_local().isoformat(),
+        "timezone": APP_TIMEZONE,
         "langfuse": langfuse_status(),
         "recordings": recording_sync_status(),
     }
@@ -567,198 +426,169 @@ async def health():
 
 # ── Single call ───────────────────────────────────────────────────────────────
 
-async def _get_call_campaign(campaign_id: str) -> Optional[dict]:
-    """Validate a selected campaign and ensure it has a usable outbound script."""
-    if not campaign_id:
-        return None
-    campaign = await get_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Selected campaign was not found")
-    if campaign.get("status") != "active":
-        raise HTTPException(409, "Selected campaign is not active")
-    if not campaign.get("system_prompt"):
-        raise HTTPException(409, "Selected campaign script is not ready yet")
-    campaign["call_prompt"] = await _assemble_campaign_call_prompt(campaign)
-    return campaign
+_DISPATCH_ERRORS = {
+    "suppressed": (409, "Number is on the Do-Not-Call list"),
+    "blocked_window": (409, "Outside the permitted calling hours"),
+    "spend_cap": (409, "Monthly spend cap reached — call refused"),
+    "failed": (500, "Failed to dispatch call — check LiveKit credentials and trunk ID"),
+}
+
+
+@app.get("/business")
+async def business_info():
+    """The fixed business setup (from business.py), so the dashboard never duplicates it."""
+    return {
+        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME,
+        "branches": list(BRANCHES), "session_times": list(SESSION_TIMES),
+        "campaigns": [{"key": k, **v} for k, v in CAMPAIGNS.items()],
+        "missed_reasons": MISSED_REASONS,
+    }
+
 
 @app.post("/call/single")
 async def call_single(request: Request):
     body = await request.json()
-    phone        = (body.get("phone_number") or "").strip()
-    lead_name    = (body.get("lead_name") or "").strip() or "there"
-    custom_p     = body.get("system_prompt", "")
-    campaign_id  = body.get("campaign_id", "")
-    brand_id     = (body.get("brand_id") or "").strip()
-
+    phone       = (body.get("phone_number") or "").strip()
+    lead_name   = (body.get("lead_name") or "").strip() or "there"
+    campaign    = campaign_or_default(body.get("campaign"))
+    missed_date = (body.get("missed_date") or "").strip()
     if not phone:
         raise HTTPException(400, "phone_number is required")
 
-    meta: dict = {}
-    campaign = await _get_call_campaign(campaign_id)
-    if campaign:
-        meta["campaign_id"] = campaign["id"]
-        meta["campaign_name"] = campaign["name"]
-        meta["system_prompt"] = campaign["call_prompt"]
-    if custom_p:
-        if campaign:
-            meta["system_prompt"] += (
-                "\n\n━━━ ADDITIONAL CALL-SPECIFIC INSTRUCTIONS ━━━\n" + custom_p.strip()
-            )
-        else:
-            meta["system_prompt"] = custom_p
-    profile_id = await _default_outbound_profile_id()
-    if profile_id:
-        meta["agent_profile_id"] = profile_id
-    # Explicit brand wins; else the selected campaign's brand; else the default.
-    meta["brand_id"] = await _resolve_call_brand_id(brand_id or (campaign or {}).get("brand_id"))
-
-    ok = await _dispatch_call(phone, lead_name, meta)
-    if not ok:
-        raise HTTPException(500, "Failed to dispatch call — check LiveKit credentials and trunk ID")
-    return {"status": "dispatched", "phone": phone}
+    meta: dict = {"campaign": campaign}
+    if campaign == MISSED_CLASS and missed_date:
+        meta["missed_date"] = missed_date
+    result = await dispatch_guarded(phone, lead_name, meta)
+    if result == "dispatched":
+        return {"status": "dispatched", "phone": phone, "campaign": campaign}
+    status_code, message = _DISPATCH_ERRORS.get(result, (500, "Call not dispatched"))
+    raise HTTPException(status_code, message)
 
 
-# ── Batch CSV call ────────────────────────────────────────────────────────────
+# ── Call lists (one uploaded CSV = one run of a campaign) ─────────────────────
 
-@app.post("/call/batch")
-async def call_batch(
-    file: UploadFile = File(...),
-    call_delay_seconds: int = Form(3),
-    system_prompt: str = Form(""),
-    campaign_id: str = Form(""),
-    brand_id: str = Form(""),
-):
-    content = await file.read()
-    text = content.decode("utf-8-sig")
+def _parse_call_list(text: str) -> list:
+    """Read a CSV of people to call. Needs a phone column; name and missed_date
+    (the class they missed) are optional. Header names are case-insensitive."""
     reader = csv.DictReader(io.StringIO(text))
-    contacts = [row for row in reader]
-
-    if not contacts:
-        raise HTTPException(400, "CSV has no rows")
-
-    campaign = await _get_call_campaign(campaign_id)
-    agent_profile_id = await _default_outbound_profile_id()
-    resolved_brand_id = await _resolve_call_brand_id(brand_id or (campaign or {}).get("brand_id"))
-
-    dispatched = 0
-    failed = 0
-    results = []
-
-    for row in contacts:
-        phone = (row.get("phone") or row.get("phone_number") or "").strip()
-        name  = (row.get("name") or row.get("lead_name") or "").strip() or "there"
+    contacts = []
+    for raw in reader:
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
+        phone = row.get("phone") or row.get("phone_number") or row.get("mobile") or ""
         if not phone:
-            failed += 1
-            results.append({"phone": "", "status": "skipped", "reason": "no phone"})
             continue
-
-        meta: dict = {}
-        if resolved_brand_id:
-            meta["brand_id"] = resolved_brand_id
-        if campaign:
-            meta["campaign_id"] = campaign["id"]
-            meta["campaign_name"] = campaign["name"]
-            meta["system_prompt"] = campaign["call_prompt"]
-        if system_prompt:
-            if campaign:
-                meta["system_prompt"] += (
-                    "\n\n━━━ ADDITIONAL CALL-SPECIFIC INSTRUCTIONS ━━━\n" + system_prompt.strip()
-                )
-            else:
-                meta["system_prompt"] = system_prompt
-        if agent_profile_id:
-            meta["agent_profile_id"] = agent_profile_id
-
-        ok = await _dispatch_call(phone, name, meta)
-        if ok:
-            dispatched += 1
-            results.append({"phone": phone, "name": name, "status": "dispatched"})
-        else:
-            failed += 1
-            results.append({"phone": phone, "name": name, "status": "failed"})
-
-        if call_delay_seconds > 0:
-            await asyncio.sleep(call_delay_seconds)
-
-    return {"dispatched": dispatched, "failed": failed, "results": results}
+        contacts.append({
+            "phone": phone,
+            "name": row.get("name") or row.get("lead_name") or "there",
+            "missed_date": row.get("missed_date") or row.get("date") or "",
+        })
+    return contacts
 
 
-# ── Appointments ──────────────────────────────────────────────────────────────
+@app.post("/campaigns/upload")
+async def upload_call_list(
+    file: UploadFile = File(...),
+    campaign: str = Form(TRIAL),
+    call_delay_seconds: int = Form(3),
+):
+    contacts = _parse_call_list((await file.read()).decode("utf-8-sig"))
+    if not contacts:
+        raise HTTPException(400, "The CSV has no rows with a phone number")
+    campaign = campaign_or_default(campaign)
+    label = CAMPAIGNS[campaign]["label"]
+    name = f"{label} — {file.filename or 'call list'} ({now_local().strftime('%d %b %H:%M')})"
+    run_id = await create_call_run(name, campaign, max(0, int(call_delay_seconds)))
+    loaded = await create_campaign_contacts(run_id, contacts)
+    _start_run(run_id)
+    return {"id": run_id, "contacts_loaded": loaded, "status": "running"}
+
+
+@app.get("/campaigns")
+async def list_call_runs():
+    runs = await get_call_runs()
+    for run in runs:
+        counts = await count_campaign_contacts_by_status(run["id"])
+        run["counts"] = counts
+        run["total"] = sum(counts.values())
+        run["running"] = run["id"] in _running
+    return runs
+
+
+@app.patch("/campaigns/{run_id}/status")
+async def set_call_run_status(run_id: str, request: Request):
+    body = await request.json()
+    status = body.get("status", "")
+    if status not in ("active", "paused"):
+        raise HTTPException(400, "status must be active | paused")
+    if not await update_call_run_status(run_id, status):
+        raise HTTPException(404, "Call list not found")
+    if status == "active":
+        _start_run(run_id)
+    return {"status": status}
+
+
+@app.delete("/campaigns/{run_id}")
+async def remove_call_run(run_id: str):
+    await update_call_run_status(run_id, "paused")  # stop the runner before deleting
+    if not await delete_call_run(run_id):
+        raise HTTPException(404, "Call list not found")
+    return {"status": "deleted"}
+
+
+# ── Trial bookings ────────────────────────────────────────────────────────────
 
 @app.get("/appointments")
-async def list_appointments(
-    date: Optional[str] = Query(None), brand_id: Optional[str] = Query(None),
-):
-    return await get_all_trials(date_filter=date, brand_id=brand_id)
-
-
-def _parse_booking_config(brand: Optional[dict]) -> Optional[dict]:
-    """Parse a brand's booking_config JSON into a dict (None if no brand)."""
-    if not brand:
-        return None
-    raw = brand.get("booking_config")
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            return json.loads(raw)
-        except Exception:
-            return {}
-    return {}
+async def list_appointments(date: Optional[str] = Query(None)):
+    return await get_all_trials(date_filter=date)
 
 
 @app.post("/appointments")
 async def create_appointment(request: Request):
     body = await request.json()
-    # location is optional now — a brand may have no locations (or a single one).
-    for f in ("name", "phone", "date", "time"):
+    for f in ("name", "phone", "date", "time", "location"):
         if not body.get(f):
             raise HTTPException(400, f"{f} is required")
-    # Resolve the brand so booking validates against ITS locations/slot-times.
-    brand_id = (body.get("brand_id") or "").strip()
-    brand = await get_brand(brand_id) if brand_id else await get_default_brand()
-    resolved_brand_id = brand["id"] if brand else None
-    config = _parse_booking_config(brand)
-    location = body.get("location", "")
-    service = body.get("service", "")
-    resource = body.get("resource", "")
     try:
-        result = await insert_trial(
-            body["name"], body["phone"], body["date"], body["time"], location,
-            resolved_brand_id, config, service, resource,
-        )
+        result = await book_trial(body["name"], body["phone"], body["date"], body["time"], body["location"])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except TrialSlotUnavailable as exc:
-        alternatives = await get_next_available_trial_slots(
-            body["date"], body["time"], location, brand_id=resolved_brand_id, config=config,
-            service=service, resource=resource,
-        )
+        alternatives = await next_free_trial_slots(body["date"], body["time"], body["location"])
         raise HTTPException(409, {
             "message": "That slot is already booked",
             "alternatives": alternatives,
         }) from exc
-    return {
-        "booking_id": result["booking_id"], "status": "booked",
-        "service": result.get("service", ""), "resource": result.get("resource", ""),
-    }
+    return {"booking_id": result["booking_id"], "status": "booked"}
 
 
 @app.delete("/appointments/{appointment_id}")
 async def cancel_appt(appointment_id: str):
     ok = await cancel_trial(appointment_id)
     if not ok:
-        raise HTTPException(404, "Appointment not found or already cancelled")
+        raise HTTPException(404, "Booking not found or already cancelled")
     return {"status": "cancelled"}
 
+
+# ── Missed classes ────────────────────────────────────────────────────────────
+
+@app.get("/missed-classes")
+async def list_missed_classes():
+    return await get_missed_classes()
+
+
+@app.delete("/missed-classes/{row_id}")
+async def remove_missed_class(row_id: str):
+    if not await delete_missed_class(row_id):
+        raise HTTPException(404, "Record not found")
+    return {"status": "deleted"}
 
 # ── Call logs ─────────────────────────────────────────────────────────────────
 
 @app.get("/calls")
 async def list_calls(
-    page: int = Query(1), limit: int = Query(20), brand_id: Optional[str] = Query(None),
+    page: int = Query(1), limit: int = Query(20), campaign: Optional[str] = Query(None),
 ):
-    return await get_all_calls(page=page, limit=limit, brand_id=brand_id)
+    return await get_all_calls(page=page, limit=limit, campaign=campaign or None)
 
 
 @app.post("/calls/recordings/sync")
@@ -821,421 +651,49 @@ async def add_memory(phone: str, request: Request):
     return {"status": "saved"}
 
 
-# ── Stats / Charts ────────────────────────────────────────────────────────────
+# ── Stats ─────────────────────────────────────────────────────────────────────
 
 @app.get("/stats")
-async def stats(brand_id: Optional[str] = Query(None)):
-    return await get_stats(brand_id=brand_id)
+async def stats():
+    return await get_stats()
 
-
-@app.get("/stats/brands")
-async def stats_by_brand():
-    return await get_brand_breakdown()
-
-
-# ── Campaigns ─────────────────────────────────────────────────────────────────
-
-@app.get("/campaigns")
-async def list_campaigns():
-    return await get_all_campaigns()
-
-
-@app.post("/campaigns")
-async def new_campaign(request: Request):
-    body = await request.json()
-    name = body.get("name", "").strip()
-    if not name:
-        raise HTTPException(400, "name is required")
-
-    contacts = body.get("contacts", [])
-    contacts_json = json.dumps(contacts)
-
-    purpose = (body.get("purpose") or "").strip()
-    cid = await create_campaign(
-        name=name,
-        contacts_json=contacts_json,
-        schedule_type=body.get("schedule_type", "once"),
-        schedule_time=body.get("schedule_time", "09:00"),
-        call_delay_seconds=int(body.get("call_delay_seconds", 3)),
-        system_prompt=body.get("system_prompt"),
-        agent_profile_id=body.get("agent_profile_id"),
-        purpose=purpose or None,
-        brand_id=await _resolve_call_brand_id((body.get("brand_id") or "").strip()),
-    )
-
-    campaign = await get_campaign(cid)
-    if campaign:
-        _schedule_campaign(campaign)
-
-    # If a purpose was given (and no explicit prompt), generate the script in the background.
-    if purpose and not body.get("system_prompt"):
-        asyncio.create_task(_regenerate_campaign(cid))
-
-    return {"id": cid, "status": "created"}
-
-
-@app.post("/campaigns/upload")
-async def upload_campaign(
-    file: UploadFile = File(...),
-    name: str = Form(...),
-    schedule_type: str = Form("once"),
-    schedule_time: str = Form("09:00"),
-    call_delay_seconds: int = Form(3),
-    system_prompt: str = Form(""),
-    agent_profile_id: str = Form(""),
-    purpose: str = Form(""),
-    brand_id: str = Form(""),
-):
-    content = await file.read()
-    text = content.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-    contacts = []
-    for row in reader:
-        phone = (row.get("phone") or row.get("phone_number") or "").strip()
-        nm    = (row.get("name") or row.get("lead_name") or "there").strip()
-        if phone:
-            entry: dict = {"phone": phone, "name": nm}
-            contacts.append(entry)
-
-    if not contacts:
-        raise HTTPException(400, "CSV has no valid rows with a phone column")
-
-    cid = await create_campaign(
-        name=name,
-        contacts_json=json.dumps(contacts),
-        schedule_type=schedule_type,
-        schedule_time=schedule_time,
-        call_delay_seconds=call_delay_seconds,
-        system_prompt=system_prompt or None,
-        agent_profile_id=agent_profile_id or None,
-        purpose=(purpose or "").strip() or None,
-        brand_id=await _resolve_call_brand_id(brand_id.strip()),
-    )
-
-    campaign = await get_campaign(cid)
-    if campaign:
-        _schedule_campaign(campaign)
-
-    if purpose.strip() and not system_prompt:
-        asyncio.create_task(_regenerate_campaign(cid))
-
-    return {"id": cid, "contacts_loaded": len(contacts), "status": "created"}
-
-
-@app.get("/campaigns/{campaign_id}")
-async def get_campaign_detail(campaign_id: str):
-    c = await get_campaign(campaign_id)
-    if not c:
-        raise HTTPException(404, "Campaign not found")
-    return c
-
-
-@app.patch("/campaigns/{campaign_id}/status")
-async def set_campaign_status(campaign_id: str, request: Request):
-    body = await request.json()
-    status = body.get("status", "")
-    if status not in ("active", "paused", "completed"):
-        raise HTTPException(400, "status must be active | paused | completed")
-    ok = await update_campaign_status(campaign_id, status)
-    if not ok:
-        raise HTTPException(404, "Campaign not found")
-
-    if status == "active":
-        campaign = await get_campaign(campaign_id)
-        if campaign:
-            _schedule_campaign(campaign)
-    elif status == "paused":
-        job_id = _scheduled_campaign_jobs.get(campaign_id)
-        if job_id:
-            try:
-                scheduler.remove_job(job_id)
-            except Exception:
-                pass
-
-    return {"status": status}
-
-
-@app.post("/campaigns/{campaign_id}/feedback")
-async def campaign_feedback(campaign_id: str, request: Request):
-    body = await request.json()
-    text = (body.get("feedback") or "").strip()
-    if not text:
-        raise HTTPException(400, "feedback is required")
-    c = await get_campaign(campaign_id)
-    if not c:
-        raise HTTPException(404, "Campaign not found")
-    await append_campaign_feedback(campaign_id, text)
-    # Persist the visible state before returning so the UI never briefly shows
-    # the old script as ready while the background rewrite is queued.
-    await set_campaign_prompt_status(campaign_id, "rewriting")
-    # Regenerate the prompt in the background using purpose + all feedback so far.
-    asyncio.create_task(_regenerate_campaign(campaign_id, "rewriting"))
-    return {"status": "feedback_received", "regenerating": True}
-
-
-@app.post("/campaigns/{campaign_id}/run")
-async def run_campaign_now(campaign_id: str):
-    campaign = await get_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
-    asyncio.create_task(_run_campaign(campaign_id))
-    return {"status": "running", "campaign_id": campaign_id}
-
-
-@app.delete("/campaigns/{campaign_id}")
-async def remove_campaign(campaign_id: str):
-    job_id = _scheduled_campaign_jobs.pop(campaign_id, None)
-    if job_id:
-        try:
-            scheduler.remove_job(job_id)
-        except Exception:
-            pass
-    ok = await delete_campaign(campaign_id)
-    if not ok:
-        raise HTTPException(404, "Campaign not found")
-    return {"status": "deleted"}
-
-
-# ── Brands ────────────────────────────────────────────────────────────────────
-
-def _as_json_text(value, default: str) -> str:
-    """Accept a list/dict (serialise to JSON) or an already-JSON string."""
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value.strip() or default
-    try:
-        return json.dumps(value)
-    except Exception:
-        return default
-
-
-@app.get("/brand-defaults")
-async def brand_defaults():
-    """The effective fallback prompt content, so the Brands editor can pre-fill
-    empty fields. Every brand falls back to the same neutral generic content — the
-    agent has no built-in business of its own. The `builtin` key is kept for
-    backwards compatibility with the editor and mirrors `generic`."""
-    from prompts import GENERIC_OUTBOUND_PROMPT, GENERIC_INBOUND_PROMPT
-    generic = {
-        "outbound_prompt": GENERIC_OUTBOUND_PROMPT,
-        "inbound_prompt": GENERIC_INBOUND_PROMPT,
-        "business_context": "",
-    }
-    return {"builtin": generic, "generic": generic}
-
-
-@app.get("/brands")
-async def list_brands():
-    return await get_all_brands()
-
-
-@app.post("/brands/generate")
-async def generate_brand_prompts(request: Request):
-    """Write a brand's outbound/inbound/facts from a plain-English description, so
-    the user doesn't have to author prompts by hand. Returns the drafts for review."""
-    body = await request.json()
-    description = (body.get("description") or "").strip()
-    if not description:
-        raise HTTPException(400, "description is required")
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise HTTPException(503, "GOOGLE_API_KEY is not configured — cannot generate prompts")
-    assets = await _generate_brand_assets(
-        description,
-        (body.get("name") or "").strip(),
-        (body.get("assistant_name") or "").strip(),
-    )
-    if not assets:
-        raise HTTPException(502, "Could not generate prompts — please try again or write them manually")
-    return assets
-
-
-@app.post("/brands/refine")
-async def refine_brand_prompts(request: Request):
-    """Apply plain-English feedback to the brand's current prompts and return the
-    revised drafts for review."""
-    body = await request.json()
-    feedback = (body.get("feedback") or "").strip()
-    if not feedback:
-        raise HTTPException(400, "feedback is required")
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise HTTPException(503, "GOOGLE_API_KEY is not configured — cannot refine prompts")
-    assets = await _refine_brand_assets(
-        feedback,
-        {
-            "business_context": body.get("business_context") or "",
-            "outbound_prompt": body.get("outbound_prompt") or "",
-            "inbound_prompt": body.get("inbound_prompt") or "",
-            "greeting": body.get("greeting") or "",
-        },
-        (body.get("name") or "").strip(),
-        (body.get("assistant_name") or "").strip(),
-    )
-    if not assets:
-        raise HTTPException(502, "Could not refine prompts — please try again")
-    return assets
-
-
-@app.get("/brands/{brand_id}")
-async def get_brand_detail(brand_id: str):
-    brand = await get_brand(brand_id)
-    if not brand:
-        raise HTTPException(404, "Brand not found")
-    return brand
-
-
-@app.post("/brands")
-async def new_brand(request: Request):
-    body = await request.json()
-    name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "name is required")
-    bid = await create_brand(
-        name=name,
-        assistant_name=(body.get("assistant_name") or "Tina").strip() or "Tina",
-        inbound_numbers=_as_json_text(body.get("inbound_numbers"), "[]"),
-        outbound_prompt=body.get("outbound_prompt") or None,
-        inbound_prompt=body.get("inbound_prompt") or None,
-        business_context=body.get("business_context") or None,
-        booking_config=_as_json_text(body.get("booking_config"), "{}"),
-        voice=body.get("voice") or None,
-        model=body.get("model") or None,
-        greeting=body.get("greeting") or None,
-        is_default=bool(body.get("is_default", False)),
-    )
-    return {"id": bid, "status": "created"}
-
-
-@app.put("/brands/{brand_id}")
-async def edit_brand(brand_id: str, request: Request):
-    body = await request.json()
-    updates: dict = {}
-    for field in ("name", "assistant_name", "outbound_prompt", "inbound_prompt",
-                  "business_context", "voice", "model", "greeting"):
-        if field in body:
-            updates[field] = body[field]
-    if "inbound_numbers" in body:
-        updates["inbound_numbers"] = _as_json_text(body["inbound_numbers"], "[]")
-    if "booking_config" in body:
-        updates["booking_config"] = _as_json_text(body["booking_config"], "{}")
-    if "is_default" in body:
-        updates["is_default"] = 1 if body["is_default"] else 0
-    if not updates:
-        raise HTTPException(400, "No updatable fields provided")
-    ok = await update_brand(brand_id, updates)
-    if not ok:
-        raise HTTPException(404, "Brand not found")
-    return {"status": "updated"}
-
-
-@app.delete("/brands/{brand_id}")
-async def remove_brand(brand_id: str):
-    ok = await delete_brand(brand_id)
-    if not ok:
-        raise HTTPException(404, "Brand not found")
-    return {"status": "deleted"}
-
-
-@app.post("/brands/{brand_id}/set-default")
-async def make_brand_default(brand_id: str):
-    brand = await get_brand(brand_id)
-    if not brand:
-        raise HTTPException(404, "Brand not found")
-    await set_default_brand(brand_id)
-    return {"status": "default set"}
-
-
-# ── Agent Profiles ────────────────────────────────────────────────────────────
-
-@app.get("/agent-profiles")
-async def list_agent_profiles():
-    return await get_all_agent_profiles()
-
-
-@app.post("/agent-profiles")
-async def new_agent_profile(request: Request):
-    body = await request.json()
-    name = body.get("name", "").strip()
-    if not name:
-        raise HTTPException(400, "name is required")
-    pid = await create_agent_profile(
-        name=name,
-        voice=body.get("voice", "Aoede"),
-        model=body.get("model", "gemini-3.1-flash-live-preview"),
-        system_prompt=body.get("system_prompt"),
-        enabled_tools=json.dumps(body.get("enabled_tools", [])),
-        is_default=bool(body.get("is_default", False)),
-    )
-    return {"id": pid, "status": "created"}
-
-
-@app.put("/agent-profiles/{profile_id}")
-async def edit_agent_profile(profile_id: str, request: Request):
-    body = await request.json()
-    updates: dict = {}
-    for field in ("name", "voice", "model", "system_prompt"):
-        if field in body:
-            updates[field] = body[field]
-    if "enabled_tools" in body:
-        updates["enabled_tools"] = json.dumps(body["enabled_tools"])
-    if "is_default" in body:
-        updates["is_default"] = 1 if body["is_default"] else 0
-    if not updates:
-        raise HTTPException(400, "No updatable fields provided")
-    if updates.get("is_default"):
-        await set_default_agent_profile(profile_id)
-    else:
-        ok = await update_agent_profile(profile_id, updates)
-        if not ok:
-            raise HTTPException(404, "Profile not found")
-    return {"status": "updated"}
-
-
-@app.delete("/agent-profiles/{profile_id}")
-async def remove_agent_profile(profile_id: str):
-    ok = await delete_agent_profile(profile_id)
-    if not ok:
-        raise HTTPException(404, "Profile not found")
-    return {"status": "deleted"}
-
-
-@app.post("/agent-profiles/{profile_id}/set-default")
-async def set_profile_default(profile_id: str):
-    profile = await get_agent_profile(profile_id)
-    if not profile:
-        raise HTTPException(404, "Profile not found")
-    await set_default_agent_profile(profile_id)
-    return {"status": "default set"}
-
-
-# ── Settings (BYOK) ───────────────────────────────────────────────────────────
+# ── Settings (read-only view of env) ───────────────────────────────────────────────────────────
 
 @app.get("/settings")
 async def get_settings():
     return await get_all_settings()
 
 
-@app.post("/settings")
-async def post_settings(request: Request):
+# ── Do-Not-Call list ──────────────────────────────────────────────────────────
+
+@app.get("/dnc")
+async def get_dnc():
+    return await list_dnc()
+
+
+@app.post("/dnc")
+async def add_to_dnc(request: Request):
     body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(400, "Expected a JSON object")
-    await save_settings(body)
-    return {"status": "saved", "keys_updated": list(body.keys())}
+    phone = (body.get("phone") or body.get("phone_number") or "").strip()
+    if not phone:
+        raise HTTPException(400, "phone is required")
+    try:
+        entry_id = await add_dnc(
+            phone,
+            reason=(body.get("reason") or "manual").strip(),
+            source="dashboard",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"id": entry_id, "status": "suppressed"}
 
 
-@app.get("/settings/{key}")
-async def get_one_setting(key: str):
-    value = await get_setting(key)
-    return {"key": key, "value": value, "configured": bool(value)}
-
-
-@app.post("/settings/{key}")
-async def set_one_setting(key: str, request: Request):
-    body = await request.json()
-    value = str(body.get("value", ""))
-    await set_setting(key, value)
-    return {"key": key, "status": "saved"}
+@app.delete("/dnc/{entry_id}")
+async def delete_from_dnc(entry_id: str):
+    ok = await remove_dnc(entry_id)
+    if not ok:
+        raise HTTPException(404, "DNC entry not found")
+    return {"status": "removed"}
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
