@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from livekit import agents, api
-from livekit.agents import llm
+from livekit.agents import RunContext, llm
 
 from db import (
     TrialSlotUnavailable, check_trial_slot, get_next_available_trial_slots,
@@ -52,6 +52,7 @@ class AppointmentTools(llm.ToolContext):
         # Set by the entrypoint after the AgentSession is built, so end_call can
         # wait for the goodbye to finish playing before hanging up.
         self.session = None
+        self._hangup_task: Optional[asyncio.Task] = None
         super().__init__(tools=[])
 
     def build_tool_list(self, enabled: list, *, inbound: bool = False) -> list:
@@ -217,9 +218,9 @@ class AppointmentTools(llm.ToolContext):
             return "NOT BOOKED: technical issue saving the booking. Do not tell the caller it is confirmed."
 
     @llm.function_tool
-    async def end_call(self, outcome: str, reason: str = "") -> str:
+    async def end_call(self, context: RunContext, outcome: str, reason: str = "") -> str:
         """
-        End the call and log the outcome. ALWAYS call this before the call ends.
+        End the call and log the outcome. ALWAYS say a short goodbye to the caller first, then call this.
         outcome: 'booked' | 'completed' | 'not_interested' | 'wrong_number' | 'voicemail' | 'no_answer' | 'callback_requested'
         reason: brief description
         """
@@ -234,15 +235,76 @@ class AppointmentTools(llm.ToolContext):
             self._call_logged = True
         except Exception as exc:
             logger.error("Failed to log call: %s", exc)
-        # Let the spoken goodbye finish before hanging up so the call doesn't
-        # cut off mid-sentence. Wait for the current speech to play out if the
-        # session API supports it, then a short safety buffer.
+        # Let any goodbye spoken before this tool call finish playing.
+        # (SpeechHandle.wait_for_playout() raises inside the owning tool; the
+        # RunContext variant waits only for the speech that preceded the call.)
         try:
-            speech = getattr(self.session, "current_speech", None) if self.session else None
-            if speech is not None and hasattr(speech, "wait_for_playout"):
-                await speech.wait_for_playout()
+            await asyncio.wait_for(context.wait_for_playout(), timeout=15)
         except Exception:
             pass
+        if self._goodbye_spoken():
+            await self._drain_and_hang_up()
+            return "Call ended."
+        # Some models (e.g. gemini-3.8-live) call end_call without saying goodbye.
+        # A reply generated inside this tool would queue behind it, so speak the
+        # goodbye and hang up from a background task once the tool has returned.
+        if self._hangup_task is None:
+            self._hangup_task = asyncio.create_task(self._say_goodbye_then_hang_up(outcome))
+        return "Call ending. Do not say anything else."
+
+    def _goodbye_spoken(self) -> bool:
+        """True when the agent has spoken since the caller's last message."""
+        try:
+            items = self.session.history.items if self.session else []
+        except Exception:
+            return True
+        for item in reversed(items):
+            role = getattr(item, "role", None)
+            if role == "assistant":
+                return True
+            if role == "user":
+                return False
+        return False
+
+    async def _wait_until_quiet(self, timeout: float) -> None:
+        """Wait until the agent is neither thinking nor speaking."""
+        deadline = time.time() + timeout
+        quiet_since = None
+        while time.time() < deadline:
+            state = getattr(self.session, "agent_state", None) if self.session else None
+            if state in ("thinking", "speaking"):
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= 0.6:
+                return
+            await asyncio.sleep(0.2)
+
+    async def _say_goodbye_then_hang_up(self, outcome: str) -> None:
+        try:
+            # Let the tool turn settle; the model may still speak its own goodbye.
+            await self._wait_until_quiet(timeout=8)
+            if self.session is not None and not self._goodbye_spoken():
+                closing = {
+                    "callback_requested": "Acknowledge that they're busy and say you'll call back at a better time.",
+                    "booked": "Confirm the booking briefly.",
+                    "not_interested": "Respect their decision without pushing.",
+                    "wrong_number": "Apologise for the mix-up.",
+                }.get(outcome, "")
+                handle = self.session.generate_reply(
+                    instructions=(
+                        "The call is ending now. Say one short, warm goodbye to the caller in the "
+                        f"language of the conversation and thank them for their time. {closing} "
+                        "Do not ask any questions."
+                    ),
+                    tool_choice="none",
+                )
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+        except Exception as exc:
+            logger.warning("Could not speak goodbye before hanging up: %s", exc)
+        await self._drain_and_hang_up()
+
+    async def _drain_and_hang_up(self) -> None:
         try:
             await asyncio.sleep(float(os.environ.get("END_CALL_DRAIN_SECONDS", "2.0")))
         except Exception:
@@ -270,7 +332,6 @@ class AppointmentTools(llm.ToolContext):
             await self.ctx.room.disconnect()
         except Exception:
             pass
-        return "Call ended."
 
     async def ensure_call_logged(
         self,
