@@ -16,8 +16,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from business import (
-    BRANCHES, BRANCH_ALIASES, CLOSED_WEEKDAYS, MISSED_CLASS, MISSED_REASONS,
-    SESSION_MINUTES, SESSION_TIMES,
+    BRANCHES, BRANCH_ALIASES, CLOSED_WEEKDAYS, MISSED_REASONS, SESSION_MINUTES, SESSION_TIMES,
 )
 
 logger = logging.getLogger("outbound-db")
@@ -559,94 +558,25 @@ NON_CONNECTED_OUTCOMES = {"no_answer", "busy", "failed", "declined", "timeout"}
 
 
 async def get_stats() -> dict:
+    """The four dashboard numbers: total calls, answer rate, average duration and spend."""
     db = await _adb()
     rows = (await db.table("call_logs").select(
-        "outcome, duration_seconds, timestamp, estimated_cost, campaign"
+        "outcome, duration_seconds, timestamp, estimated_cost"
     ).execute()).data or []
     today_iso = datetime.now(IST).date().isoformat()
 
-    def connected(r) -> bool:
-        return (r.get("outcome") or "") not in NON_CONNECTED_OUTCOMES
-
-    total_calls    = len(rows)
-    # Booking rate is measured on calls that could book: everything except missed-class calls.
-    booking_calls  = [r for r in rows if r.get("campaign") != MISSED_CLASS]
-    booked         = sum(1 for r in rows if r.get("outcome") == "booked")
-    durations      = [r["duration_seconds"] for r in rows if r.get("duration_seconds")]
-    avg_dur        = sum(durations) / len(durations) if durations else 0
-    booking_rate   = round((booked / len(booking_calls) * 100) if booking_calls else 0, 1)
-    connected_n    = sum(1 for r in rows if connected(r))
-    answer_rate    = round((connected_n / total_calls * 100) if total_calls else 0, 1)
-    callbacks_pending = sum(1 for r in rows if r.get("outcome") == "callback_requested")
-    calls_today    = sum(1 for r in rows if (r.get("timestamp") or "")[:10] == today_iso)
-    booked_today   = sum(1 for r in rows if r.get("outcome") == "booked" and (r.get("timestamp") or "")[:10] == today_iso)
-    total_cost     = sum(float(r.get("estimated_cost") or 0) for r in rows)
-
-    outcomes: dict = defaultdict(int)
-    daily: dict = defaultdict(int)
-    for r in rows:
-        outcomes[r.get("outcome") or "unknown"] += 1
-        ts = (r.get("timestamp") or "")[:10]
-        if ts:
-            daily[ts] += 1
-    today = datetime.now(IST).date()
-    timeline = [
-        {"date": (today - timedelta(days=i)).isoformat(),
-         "count": daily.get((today - timedelta(days=i)).isoformat(), 0)}
-        for i in range(13, -1, -1)
-    ]
-
-    # Missed-class reasons recorded by the agent.
-    reasons: list = []
-    try:
-        reasons = (await db.table("missed_classes").select("reason_category").execute()).data or []
-    except Exception:
-        pass
-    reason_counts: dict = defaultdict(int)
-    for r in reasons:
-        reason_counts[r.get("reason_category") or "other"] += 1
-
-    # Per-campaign breakdown. Calls from before campaigns were tracked have no campaign.
-    by_campaign: dict = {}
-    for r in rows:
-        key = r.get("campaign") or "earlier"
-        b = by_campaign.setdefault(key, {"campaign": key, "calls": 0, "connected": 0, "booked": 0, "cost": 0.0})
-        b["calls"] += 1
-        b["connected"] += 1 if connected(r) else 0
-        b["booked"] += 1 if r.get("outcome") == "booked" else 0
-        b["cost"] += float(r.get("estimated_cost") or 0)
-    if MISSED_CLASS in by_campaign:
-        by_campaign[MISSED_CLASS]["reasons"] = len(reasons)
-    for b in by_campaign.values():
-        b["cost"] = round(b["cost"], 4)
-
-    # Trials: upcoming and cancellations.
-    trials_upcoming = trials_cancelled = trials_total = 0
-    try:
-        trials = (await db.table("trials").select("status, date").execute()).data or []
-        trials_total = len(trials)
-        trials_cancelled = sum(1 for t in trials if t.get("status") == "cancelled")
-        trials_upcoming = sum(
-            1 for t in trials if t.get("status") == "booked" and (t.get("date") or "") >= today_iso
-        )
-    except Exception:
-        pass
-
+    total_calls = len(rows)
+    connected   = sum(1 for r in rows if (r.get("outcome") or "") not in NON_CONNECTED_OUTCOMES)
+    durations   = [r["duration_seconds"] for r in rows if r.get("duration_seconds")]
+    total_cost  = sum(float(r.get("estimated_cost") or 0) for r in rows)
     return {
-        "total_calls": total_calls, "booked": booked,
-        "avg_duration_seconds": round(avg_dur, 1), "booking_rate_percent": booking_rate,
-        "outcomes": dict(outcomes), "timeline": timeline,
-        "connected": connected_n, "answer_rate_percent": answer_rate,
-        "callbacks_pending": callbacks_pending,
-        "calls_today": calls_today, "booked_today": booked_today,
+        "total_calls": total_calls,
+        "calls_today": sum(1 for r in rows if (r.get("timestamp") or "")[:10] == today_iso),
+        "connected": connected,
+        "answer_rate_percent": round((connected / total_calls * 100) if total_calls else 0, 1),
+        "avg_duration_seconds": round(sum(durations) / len(durations), 1) if durations else 0,
         "total_cost": round(total_cost, 4),
         "cost_per_call": round((total_cost / total_calls) if total_calls else 0, 4),
-        "cost_per_booking": round((total_cost / booked) if booked else 0, 4),
-        "missed_reasons_total": len(reasons), "missed_reasons": dict(reason_counts),
-        "by_campaign": sorted(by_campaign.values(), key=lambda b: b["calls"], reverse=True),
-        "trials_upcoming": trials_upcoming, "trials_cancelled": trials_cancelled,
-        "trials_total": trials_total,
-        "trial_cancel_rate_percent": round((trials_cancelled / trials_total * 100) if trials_total else 0, 1),
     }
 
 

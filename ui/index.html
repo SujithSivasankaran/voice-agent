@@ -6,7 +6,6 @@
 <meta name="robots" content="noindex, nofollow" />
 <meta name="theme-color" content="#0f172a" />
 <title>Harry's Fitcamp · AI Calling</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -198,14 +197,12 @@
   .kpi-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kpi-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 640px; }
 
-  /* ── Charts ────────────────────────────────────────────────────────────── */
-  .charts-grid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr); gap: 16px; }
-  .charts-grid .card { margin-bottom: 0; }
-  .chart-body { position: relative; height: 280px; padding: 16px 20px 20px; }
-  .donut-wrap { position: relative; height: 280px; padding: 12px 16px 16px; }
-  .donut-center { position: absolute; left: 0; right: 0; top: 12px; height: calc(100% - 70px); display: grid; place-items: center; pointer-events: none; text-align: center; }
-  .donut-center .pct { font-size: 26px; font-weight: 700; letter-spacing: -.02em; display: block; line-height: 1.1; }
-  .donut-center .lbl { font-size: 11.5px; color: var(--muted); }
+  /* ── Business facts / scripts ──────────────────────────────────────────── */
+  .facts-meta { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 14px; }
+  .facts-meta dt { color: var(--muted); }
+  .facts-meta dd { color: var(--text); }
+  .facts-text, .prompt-view { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.6; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; }
+  .prompt-view { font-family: inherit; margin: 0; }
   .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--surface-3); padding: 3px 10px; border-radius: var(--radius-pill); }
 
   /* ── Forms ─────────────────────────────────────────────────────────────── */
@@ -415,7 +412,6 @@
     main { padding: 28px 28px 56px; }
     .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .kpi-grid.two { max-width: none; }
-    .charts-grid { grid-template-columns: 1fr; }
   }
 
   /* Tablet: collapse the sidebar to an icon rail */
@@ -457,7 +453,6 @@
     .card-head, .card-foot { padding: 14px 16px; }
     .setting-row { padding: 12px 16px; flex-wrap: wrap; }
     .setting-value { max-width: none; text-align: left; flex-basis: 100%; order: 3; }
-    .chart-body, .donut-wrap { height: 240px; }
     .toolbar > select, .toolbar > input { flex: 1; min-width: 0; }
     .search-input { max-width: none; flex-basis: 100%; }
     .tabs { display: flex; width: 100%; }
@@ -632,16 +627,6 @@
       <div class="kpi-sub" id="st-answer-sub">connected</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Booked</span><span class="kpi-icon green"><svg class="ico"><use href="#i-calendar-check"/></svg></span></div>
-      <div class="kpi-value" id="st-booked">—</div>
-      <div class="kpi-sub" id="st-booked-sub">—</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Booking rate</span><span class="kpi-icon green"><svg class="ico"><use href="#i-target"/></svg></span></div>
-      <div class="kpi-value" id="st-rate">—</div>
-      <div class="kpi-sub">conversion</div>
-    </div>
-    <div class="kpi-card">
       <div class="kpi-head"><span class="kpi-label">Avg duration</span><span class="kpi-icon blue"><svg class="ico"><use href="#i-clock"/></svg></span></div>
       <div class="kpi-value" id="st-dur">—</div>
       <div class="kpi-sub">per call</div>
@@ -651,54 +636,14 @@
       <div class="kpi-value" id="st-spend">—</div>
       <div class="kpi-sub" id="st-spend-sub">est. USD</div>
     </div>
-    <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Cost per booking</span><span class="kpi-icon amber"><svg class="ico"><use href="#i-receipt"/></svg></span></div>
-      <div class="kpi-value" id="st-cpb">—</div>
-      <div class="kpi-sub">est. USD</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Missed-class reasons</span><span class="kpi-icon"><svg class="ico"><use href="#i-calendar-x"/></svg></span></div>
-      <div class="kpi-value" id="st-reasons">—</div>
-      <div class="kpi-sub" id="st-reasons-sub">recorded by Tara</div>
-    </div>
   </div>
 
-  <div class="section-label">Performance</div>
-  <div class="charts-grid">
-    <div class="card">
-      <div class="card-head"><h2>Call volume</h2><span class="chip" id="trend-hint">Last 14 days</span></div>
-      <div class="chart-body"><canvas id="chart-timeline"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h2>Outcomes</h2></div>
-      <div class="donut-wrap">
-        <canvas id="chart-outcomes"></canvas>
-        <div class="donut-center"><div><span class="pct" id="donut-pct">—</span><span class="lbl">booked</span></div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="section-label">Trials</div>
-  <div class="kpi-grid two">
-    <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Upcoming trials</span><span class="kpi-icon"><svg class="ico"><use href="#i-calendar"/></svg></span></div>
-      <div class="kpi-value" id="st-trials-upcoming">—</div>
-      <div class="kpi-sub">booked, not yet passed</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-head"><span class="kpi-label">Cancellation rate</span><span class="kpi-icon red"><svg class="ico"><use href="#i-calendar-x"/></svg></span></div>
-      <div class="kpi-value" id="st-trials-cancel">—</div>
-      <div class="kpi-sub" id="st-trials-cancel-sub">of all trials</div>
-    </div>
-  </div>
-
-  <div class="section-label">By campaign</div>
+  <div class="section-label">What Tara knows about the business</div>
   <div class="card">
-    <div class="table-wrap">
-      <table class="rtable">
-        <thead><tr><th>Campaign</th><th class="num">Calls</th><th class="num">Connected</th><th class="num">Trials booked</th><th class="num">Reasons recorded</th><th class="num">Spend (est. USD)</th></tr></thead>
-        <tbody id="campaign-breakdown-body"></tbody>
-      </table>
+    <div class="card-body">
+      <dl class="facts-meta" id="biz-meta"></dl>
+      <div class="facts-text" id="biz-facts">Loading…</div>
+      <div class="hint" style="margin-top:12px">This is given to Tara on every call. To change it, edit <code class="mono">business.py</code> and redeploy.</div>
     </div>
   </div>
 
@@ -730,7 +675,7 @@
           <div class="camp-title">Trial booking</div>
           <div class="camp-brand">Invite new leads to Harry's Fitcamp and book a free one-hour trial</div>
         </div>
-        <span class="kpi-icon green"><svg class="ico"><use href="#i-calendar-check"/></svg></span>
+        <button class="btn btn-outline btn-sm" onclick="viewPrompt('trial')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
       </div>
       <div class="camp-body">
         <div class="form-grid">
@@ -759,7 +704,7 @@
           <div class="camp-title">Missed class</div>
           <div class="camp-brand">Ask members why they missed class, record it, and encourage them to come regularly</div>
         </div>
-        <span class="kpi-icon amber"><svg class="ico"><use href="#i-calendar-x"/></svg></span>
+        <button class="btn btn-outline btn-sm" onclick="viewPrompt('missed_class')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
       </div>
       <div class="camp-body">
         <div class="form-grid three">
@@ -1015,6 +960,21 @@
   </div>
 </div>
 
+<!-- Campaign script -->
+<div class="modal-overlay" id="modal-prompt" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <div><h2 id="prompt-modal-title">Script</h2><div class="sub">Exactly what Tara is told on this campaign's calls. Text in [brackets] is filled in for each call.</div></div>
+      <button class="icon-btn modal-close" onclick="closeModal('modal-prompt')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body"><pre class="prompt-view" id="prompt-modal-body"></pre></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="copyPrompt()"><svg class="ico"><use href="#i-copy"/></svg>Copy</button>
+      <button class="btn btn-primary" onclick="closeModal('modal-prompt')">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- Change password -->
 <div class="modal-overlay" id="modal-password" role="dialog" aria-modal="true" aria-labelledby="pw-title">
   <div class="modal">
@@ -1177,11 +1137,9 @@ function toggleTheme() {
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem('t800-theme', next); } catch {}
   syncThemeButton();
-  if (_lastChartData) initCharts(_lastChartData.timeline, _lastChartData.outcomes);
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   syncThemeButton();
-  if (_lastChartData) initCharts(_lastChartData.timeline, _lastChartData.outcomes);
 });
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -1241,81 +1199,20 @@ function reasonLabel(key) {
   return labels[key] || (key ? String(key).replace(/_/g, ' ') : '—');
 }
 
-// ── Charts ────────────────────────────────────────────────────────────────────
+// ── Outcome labels ────────────────────────────────────────────────────────────
 const OUTCOME_LABELS = {
   booked: 'Booked', not_interested: 'Not interested', voicemail: 'Voicemail',
   completed: 'Completed', no_answer: 'No answer', callback_requested: 'Callback', wrong_number: 'Wrong number',
   failed: 'Failed', caller_hangup: 'Hung up', timeout: 'Timed out', busy: 'Busy', unknown: 'Unknown',
 };
-const OUTCOME_COLORS = {
-  booked: '#12b76a', not_interested: '#f04438', voicemail: '#f79009', completed: '#6366f1',
-  no_answer: '#98a2b3', callback_requested: '#2e90fa', wrong_number: '#fda29b', failed: '#d92d20',
-  caller_hangup: '#fdb022', timeout: '#b54708', busy: '#667085', unknown: '#d0d5dd',
-};
 const prettyOutcome = o => OUTCOME_LABELS[o] || (o ? String(o).replace(/_/g, ' ') : '—');
-
-function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-
-let chartTimeline, chartOutcomes, _lastChartData = null;
-
-function initCharts(timeline, outcomes) {
-  _lastChartData = { timeline, outcomes };
-  if (typeof Chart === 'undefined') return;
-  const tl = document.getElementById('chart-timeline');
-  const oc = document.getElementById('chart-outcomes');
-  if (chartTimeline) chartTimeline.destroy();
-  if (chartOutcomes) chartOutcomes.destroy();
-
-  const C = { primary: cssVar('--primary'), grid: cssVar('--border'), label: cssVar('--muted'), ink: cssVar('--text-2'), surface: cssVar('--surface') };
-  const tooltip = { backgroundColor: '#101828', titleColor: 'rgba(255,255,255,.7)', bodyColor: '#fff', padding: 10, cornerRadius: 8, displayColors: false, titleFont: { size: 11, weight: '500' }, bodyFont: { size: 13, weight: '600' } };
-
-  const counts = timeline.map(d => d.count);
-  chartTimeline = new Chart(tl, {
-    type: 'bar',
-    data: {
-      labels: timeline.map(d => fmtDayLabel(d.date)),
-      datasets: [{ label: 'Calls', data: counts, backgroundColor: C.primary, hoverBackgroundColor: cssVar('--primary-hover'), borderRadius: 6, borderSkipped: false, maxBarThickness: 28 }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { ...tooltip, callbacks: {
-          title: items => { const d = timeline[items[0].dataIndex]; return d ? fmtDayLabel(d.date) : ''; },
-          label: i => `${i.raw} call${i.raw === 1 ? '' : 's'}`,
-        } },
-      },
-      scales: {
-        x: { ticks: { color: C.label, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12 }, grid: { display: false }, border: { display: false } },
-        y: { beginAtZero: true, ticks: { color: C.label, font: { size: 11 }, precision: 0, maxTicksLimit: 5, padding: 8 }, grid: { color: C.grid, drawTicks: false }, border: { display: false }, grace: '8%' },
-      },
-    },
-  });
-
-  const keys = Object.keys(outcomes);
-  const total = keys.reduce((s, k) => s + outcomes[k], 0);
-  chartOutcomes = new Chart(oc, {
-    type: 'doughnut',
-    data: {
-      labels: keys.map(prettyOutcome),
-      datasets: [{ data: keys.map(k => outcomes[k]), backgroundColor: keys.map(k => OUTCOME_COLORS[k] || C.primary), borderColor: C.surface, borderWidth: 2, hoverOffset: 6 }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, cutout: '74%',
-      plugins: {
-        legend: { position: 'bottom', labels: { color: C.ink, font: { size: 12 }, boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: 'circle', padding: 12 } },
-        tooltip: { ...tooltip, callbacks: {
-          label: i => { const pct = total ? Math.round(i.raw / total * 100) : 0; return `${i.label}: ${i.raw} (${pct}%)`; },
-        } },
-      },
-    },
-  });
-}
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function fmtMoney(n, dp=2) { return '$' + (Number(n) || 0).toFixed(dp); }
 
 async function loadDashboard() {
+  loadBusinessFacts();
+  loadRecentCalls();
   try {
     const s = await api('/stats');
     const total = s.total_calls || 0;
@@ -1323,34 +1220,24 @@ async function loadDashboard() {
     document.getElementById('st-total-sub').textContent = (s.calls_today || 0) + ' today';
     document.getElementById('st-answer').textContent = (s.answer_rate_percent || 0) + '%';
     document.getElementById('st-answer-sub').textContent = `${fmtCompact(s.connected || 0)} of ${fmtCompact(total)} connected`;
-    document.getElementById('st-booked').textContent = fmtCompact(s.booked || 0);
-    document.getElementById('st-booked-sub').textContent = (s.booked_today || 0) + ' today';
-    document.getElementById('st-rate').textContent = (s.booking_rate_percent || 0) + '%';
     document.getElementById('st-dur').textContent = fmtDur(s.avg_duration_seconds);
     document.getElementById('st-spend').textContent = fmtMoney(s.total_cost, 2);
     document.getElementById('st-spend-sub').textContent = fmtMoney(s.cost_per_call, 4) + ' per call';
-    document.getElementById('st-cpb').textContent = s.booked ? fmtMoney(s.cost_per_booking, 2) : '—';
-    document.getElementById('st-reasons').textContent = fmtCompact(s.missed_reasons_total || 0);
-    document.getElementById('st-trials-upcoming').textContent = fmtCompact(s.trials_upcoming || 0);
-    document.getElementById('st-trials-cancel').textContent = (s.trial_cancel_rate_percent || 0) + '%';
-    document.getElementById('st-trials-cancel-sub').textContent = `${s.trials_cancelled || 0} of ${s.trials_total || 0} trials`;
-    document.getElementById('donut-pct').textContent = (s.booking_rate_percent || 0) + '%';
-    initCharts(s.timeline || [], s.outcomes || {});
-    renderCampaignBreakdown(s.by_campaign || []);
-    loadRecentCalls();
   } catch(e) { toast('Could not load stats: ' + e.message, false); }
 }
 
-function renderCampaignBreakdown(rows) {
-  document.getElementById('campaign-breakdown-body').innerHTML = rows.map(b => `
-    <tr>
-      <td>${campaignBadge(b.campaign)}</td>
-      <td class="num">${fmtCompact(b.calls)}</td>
-      <td class="num">${fmtCompact(b.connected)}</td>
-      <td class="num">${b.campaign === 'missed_class' ? '—' : fmtCompact(b.booked)}</td>
-      <td class="num">${b.campaign === 'missed_class' ? fmtCompact(b.reasons || 0) : '—'}</td>
-      <td class="num">${fmtMoney(b.cost, 2)}</td>
-    </tr>`).join('') || emptyRow(6, 'No calls yet', 'Campaign stats appear once calls are made.', 'megaphone');
+async function loadBusinessFacts() {
+  try {
+    const b = await ensureBusiness();
+    const row = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
+    document.getElementById('biz-meta').innerHTML =
+      row('Business', b.name) +
+      row('Assistant', `${b.assistant} (voice: ${b.voice})`) +
+      row('Branches', b.branches.join(', ')) +
+      row('Trial start times', b.session_times.join(', ') + ' · one hour each') +
+      row('Closed', b.closed_days.join(', ') || '—');
+    document.getElementById('biz-facts').textContent = b.facts;
+  } catch(e) { document.getElementById('biz-facts').textContent = 'Could not load business information.'; }
 }
 
 async function loadRecentCalls() {
@@ -1444,6 +1331,23 @@ document.querySelectorAll('.list-drop').forEach(dz => {
     onListFile(campaign, e.dataTransfer.files[0]);
   });
 });
+
+let _promptText = '';
+async function viewPrompt(campaign) {
+  try {
+    const r = await api('/prompts/' + campaign);
+    _promptText = r.prompt;
+    document.getElementById('prompt-modal-title').textContent = r.label + ' — script';
+    document.getElementById('prompt-modal-body').textContent = r.prompt;
+    openModal('modal-prompt');
+  } catch(e) { toast('Could not load the script: ' + e.message, false); }
+}
+
+function copyPrompt() {
+  navigator.clipboard.writeText(_promptText || '')
+    .then(() => toast('Script copied'))
+    .catch(() => toast('Could not copy', false));
+}
 
 async function loadRuns() {
   try {

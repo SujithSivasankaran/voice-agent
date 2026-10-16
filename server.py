@@ -19,9 +19,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 load_dotenv(override=False)
 
 from business import (
-    ASSISTANT_NAME, BRANCHES, BUSINESS_NAME, CAMPAIGNS, MISSED_CLASS, MISSED_REASONS,
-    SESSION_TIMES, TRIAL, campaign_or_default,
+    ASSISTANT_NAME, BRANCHES, BUSINESS_NAME, CAMPAIGNS, CLOSED_WEEKDAYS, DEFAULT_VOICE, FACTS,
+    MISSED_CLASS, MISSED_REASONS, SESSION_TIMES, TRIAL, campaign_or_default,
 )
+from prompts import build_prompt
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 from db import (
     init_db, log_error, now_local, get_all_settings, get_logs, clear_errors,
     TrialSlotUnavailable, book_trial, get_all_trials, cancel_trial, next_free_trial_slots,
@@ -438,11 +441,22 @@ _DISPATCH_ERRORS = {
 async def business_info():
     """The fixed business setup (from business.py), so the dashboard never duplicates it."""
     return {
-        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME,
+        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME, "voice": DEFAULT_VOICE,
         "branches": list(BRANCHES), "session_times": list(SESSION_TIMES),
+        "closed_days": [_WEEKDAYS[d] for d in sorted(CLOSED_WEEKDAYS)], "facts": FACTS,
         "campaigns": [{"key": k, **v} for k, v in CAMPAIGNS.items()],
         "missed_reasons": MISSED_REASONS,
     }
+
+
+@app.get("/prompts/{campaign}")
+async def campaign_prompt(campaign: str):
+    """The exact script Tara is given for a campaign. Per-call details (name, number,
+    missed date) are shown as [placeholders]; today's date is filled in at call time."""
+    if campaign not in CAMPAIGNS:
+        raise HTTPException(404, "Unknown campaign")
+    prompt = build_prompt(campaign, "[name]", caller_phone="[their number]", missed_date="[missed date]")
+    return {"campaign": campaign, "label": CAMPAIGNS[campaign]["label"], "prompt": prompt}
 
 
 @app.post("/call/single")
