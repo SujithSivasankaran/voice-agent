@@ -109,9 +109,11 @@ async def require_login(request: Request, call_next):
     # Unauthenticated: send browsers to the login page, APIs a 401 they can handle.
     accept = request.headers.get("accept", "")
     wants_html = request.method == "GET" and "text/html" in accept
-    if wants_html:
-        return RedirectResponse(url="/login", status_code=302)
-    return JSONResponse({"detail": "Authentication required"}, status_code=401)
+    response = (RedirectResponse(url="/login", status_code=302) if wants_html
+                else JSONResponse({"detail": "Authentication required"}, status_code=401))
+    if username:   # a validly signed cookie for a user who no longer exists
+        auth.clear_session_cookie(response)
+    return response
 
 
 # ── APScheduler ───────────────────────────────────────────────────────────────
@@ -355,13 +357,19 @@ async def shutdown():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    # Already signed in? Skip the form.
-    if auth.verify_session_token(request.cookies.get(auth.SESSION_COOKIE_NAME, "")):
+    # Already signed in as a user who still exists? Skip the form. A cookie for a
+    # user that no longer resolves is cleared — redirecting would loop with "/".
+    username = auth.verify_session_token(request.cookies.get(auth.SESSION_COOKIE_NAME, ""))
+    if username and await auth.resolve_principal(username):
         return RedirectResponse(url="/", status_code=302)
     login_path = Path(__file__).parent / "ui" / "login.html"
     if login_path.exists():
-        return HTMLResponse(login_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Login</h1><p>ui/login.html not found</p>", status_code=500)
+        response = HTMLResponse(login_path.read_text(encoding="utf-8"))
+    else:
+        response = HTMLResponse("<h1>Login</h1><p>ui/login.html not found</p>", status_code=500)
+    if username:
+        auth.clear_session_cookie(response)
+    return response
 
 
 @app.post("/login")

@@ -198,7 +198,13 @@ def forget_principal(username: str) -> None:
 async def authenticate(username: str, password: str) -> dict | None:
     """Check a login. Returns {"username", "role", "builtin"} or None."""
     from db import get_user_by_username
-    user = await get_user_by_username(username)
+    try:
+        user = await get_user_by_username(username)
+    except Exception as exc:
+        # Never lock everyone out because the users table is missing/unreachable:
+        # fall through to the built-in admin, and say why in the logs.
+        logger.error("User lookup failed — is migration 0006_users applied to this database? %s", exc)
+        user = None
     if user:
         if verify_password(password, user.get("password_hash") or ""):
             return {"username": user["username"], "role": user.get("role") or EMPLOYEE, "builtin": False}
@@ -219,13 +225,15 @@ async def resolve_principal(username: str) -> dict | None:
     principal = None
     try:
         user = await get_user_by_username(username)
-        if user:
-            principal = {"username": user["username"], "role": user.get("role") or EMPLOYEE, "builtin": False}
-        elif (username or "").strip() == await get_admin_username():
-            principal = {"username": username, "role": ADMIN, "builtin": True}
     except Exception as exc:
-        logger.warning("Could not resolve user %s: %s", username, exc)
-        return hit[1] if hit else None   # keep a known session alive through a DB blip
+        logger.warning("Could not look up user %s: %s", username, exc)
+        if hit:
+            return hit[1]   # keep a known session alive through a DB blip
+        user = None
+    if user:
+        principal = {"username": user["username"], "role": user.get("role") or EMPLOYEE, "builtin": False}
+    elif (username or "").strip() == await get_admin_username():
+        principal = {"username": username, "role": ADMIN, "builtin": True}
     _principal_cache[key] = (time.time() + _PRINCIPAL_TTL, principal)
     return principal
 
