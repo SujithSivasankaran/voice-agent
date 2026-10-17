@@ -198,6 +198,14 @@
   .kpi-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 640px; }
 
   /* ── Business facts / scripts ──────────────────────────────────────────── */
+  body:not(.is-admin) .admin-only { display: none !important; }
+  .signed-in { font-size: 12.5px; color: var(--muted); padding: 0 12px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .signed-in b { color: var(--text-2); font-weight: 600; }
+  .badge-admin { background: var(--primary-soft); color: var(--primary-text); }
+  .badge-employee { background: var(--neutral-soft); color: var(--muted); }
+  .day-picks { display: flex; gap: 8px; flex-wrap: wrap; }
+  .day-picks label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 6px 12px; cursor: pointer; user-select: none; }
+  .day-picks label:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-text); }
   .facts-meta { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 14px; }
   .facts-meta dt { color: var(--muted); }
   .facts-meta dd { color: var(--text); }
@@ -579,11 +587,13 @@
     </ul>
     <div class="nav-label">Configure</div>
     <ul>
+      <li class="admin-only"><a href="#users" class="nav-link" data-page="users" data-tip="Users"><svg class="ico"><use href="#i-users"/></svg><span class="txt">Users</span></a></li>
       <li><a href="#settings" class="nav-link" data-page="settings" data-tip="Settings"><svg class="ico"><use href="#i-settings"/></svg><span class="txt">Settings</span></a></li>
       <li><a href="#live-logs" class="nav-link" data-page="live-logs" data-tip="Live Logs"><svg class="ico"><use href="#i-activity"/></svg><span class="txt">Live Logs</span></a></li>
     </ul>
   </div>
   <div class="nav-foot">
+    <div class="signed-in" id="signed-in"></div>
     <div class="agent-status" title="Server status"><span class="dot" id="health-dot"></span><span id="health-text">Checking…</span></div>
     <a href="#" class="nav-link" data-tip="Toggle theme" onclick="toggleTheme();return false;"><svg class="ico" id="theme-ico"><use href="#i-moon"/></svg><span class="txt" id="theme-txt">Dark mode</span></a>
     <a href="#" class="nav-link" data-tip="Change password" onclick="changePassword();return false;"><svg class="ico"><use href="#i-key"/></svg><span class="txt">Change password</span></a>
@@ -631,11 +641,22 @@
       <div class="kpi-value" id="st-dur">—</div>
       <div class="kpi-sub">per call</div>
     </div>
-    <div class="kpi-card">
+    <div class="kpi-card admin-only">
       <div class="kpi-head"><span class="kpi-label">Total spend</span><span class="kpi-icon amber"><svg class="ico"><use href="#i-wallet"/></svg></span></div>
       <div class="kpi-value" id="st-spend">—</div>
       <div class="kpi-sub" id="st-spend-sub">est. USD</div>
     </div>
+  </div>
+
+  <div class="section-label">Locations &amp; timings</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="rtable">
+        <thead><tr><th>Branch</th><th>Open</th><th>Class hours</th><th>Trial start times</th><th></th></tr></thead>
+        <tbody id="locations-body"></tbody>
+      </table>
+    </div>
+    <div class="card-foot"><span class="page-info">Tara only offers trials at these branches, days and times. Changes apply from the next call.</span><button class="btn btn-primary btn-sm" onclick="openLocationModal()"><svg class="ico"><use href="#i-plus"/></svg>Add location</button></div>
   </div>
 
   <div class="section-label">What Tara knows about the business</div>
@@ -643,7 +664,7 @@
     <div class="card-body">
       <dl class="facts-meta" id="biz-meta"></dl>
       <div class="facts-text" id="biz-facts">Loading…</div>
-      <div class="hint" style="margin-top:12px">This is given to Tara on every call. To change it, edit <code class="mono">business.py</code> and redeploy.</div>
+      <div class="hint" style="margin-top:12px">Given to Tara on every call, together with the locations above. To change these facts, edit <code class="mono">business.py</code> and redeploy.</div>
     </div>
   </div>
 
@@ -746,7 +767,7 @@
   <div class="page-head">
     <div>
       <h1>Trial bookings</h1>
-      <p class="subtitle">Free one-hour trials at ADAYAR and ECR</p>
+      <p class="subtitle">Free one-hour trials at every branch</p>
     </div>
     <div class="head-actions">
       <button class="btn btn-primary" onclick="openAddApptModal()"><svg class="ico"><use href="#i-plus"/></svg>Add booking</button>
@@ -846,6 +867,27 @@
   </div>
 </section>
 
+<!-- USERS (admin only) -->
+<section class="page" id="page-users">
+  <div class="page-head">
+    <div>
+      <h1>Users</h1>
+      <p class="subtitle">Who can sign in to this dashboard. Admins see spend and manage users; employees don't.</p>
+    </div>
+    <div class="head-actions">
+      <button class="btn btn-primary" onclick="openUserModal()"><svg class="ico"><use href="#i-plus"/></svg>Add user</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="rtable">
+        <thead><tr><th>Username</th><th>Role</th><th>Added</th><th></th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 <!-- SETTINGS -->
 <section class="page" id="page-settings">
   <div class="page-head">
@@ -899,7 +941,7 @@
 <div class="modal-overlay" id="modal-appt" role="dialog" aria-modal="true" aria-labelledby="appt-title">
   <div class="modal">
     <div class="modal-head">
-      <div><h2 id="appt-title">Add trial booking</h2><div class="sub">One-hour trial. Monday–Saturday.</div></div>
+      <div><h2 id="appt-title">Add trial booking</h2><div class="sub">One-hour trial, at the branch's own start times.</div></div>
       <button class="icon-btn modal-close" onclick="closeModal('modal-appt')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body">
@@ -907,11 +949,11 @@
         <div class="form-group"><label for="appt-name">Name <span class="muted">*</span></label><input id="appt-name" autocomplete="name" /></div>
         <div class="form-group"><label for="appt-phone">Phone <span class="muted">*</span></label><input id="appt-phone" type="tel" inputmode="tel" placeholder="+91 98765 43210" /></div>
         <div class="form-group"><label for="appt-date">Date <span class="muted">*</span></label><input id="appt-date" type="date" /></div>
+        <div class="form-group"><label for="appt-location">Branch <span class="muted">*</span></label>
+          <select id="appt-location" onchange="onApptLocationChange()"></select>
+        </div>
         <div class="form-group"><label for="appt-time">Start time <span class="muted">*</span></label>
           <select id="appt-time"></select>
-        </div>
-        <div class="form-group"><label for="appt-location">Branch <span class="muted">*</span></label>
-          <select id="appt-location"></select>
         </div>
       </div>
     </div>
@@ -956,6 +998,67 @@
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="copyTranscript()"><svg class="ico"><use href="#i-copy"/></svg>Copy</button>
       <button class="btn btn-primary" onclick="closeModal('modal-transcript')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- User editor -->
+<div class="modal-overlay" id="modal-user" role="dialog" aria-modal="true" aria-labelledby="user-title">
+  <div class="modal">
+    <div class="modal-head">
+      <div><h2 id="user-title">Add user</h2><div class="sub" id="user-sub">They sign in with this username and password.</div></div>
+      <button class="icon-btn modal-close" onclick="closeModal('modal-user')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body stack">
+      <input type="hidden" id="user-id" />
+      <div class="form-group"><label for="user-name">Username <span class="muted">*</span></label><input id="user-name" maxlength="32" autocomplete="off" placeholder="e.g. priya" /><span class="hint">3–32 characters: letters, numbers, dot, dash or underscore.</span></div>
+      <div class="form-group"><label for="user-pass" id="user-pass-label">Password <span class="muted">*</span></label><input id="user-pass" type="password" autocomplete="new-password" minlength="10" /><span class="hint" id="user-pass-hint">At least 10 characters.</span></div>
+      <div class="form-group"><label for="user-role">Role</label>
+        <select id="user-role">
+          <option value="employee">Employee — no spend figures, no user management</option>
+          <option value="admin">Admin — everything, including spend and users</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-user')">Cancel</button>
+      <button class="btn btn-primary" id="user-save" onclick="saveUser()">Save user</button>
+    </div>
+  </div>
+</div>
+
+<!-- Location editor -->
+<div class="modal-overlay" id="modal-location" role="dialog" aria-modal="true" aria-labelledby="loc-title">
+  <div class="modal">
+    <div class="modal-head">
+      <div><h2 id="loc-title">Add location</h2><div class="sub">Sessions are one hour. Trials can be booked at any start time below, on the days the branch is open.</div></div>
+      <button class="icon-btn modal-close" onclick="closeModal('modal-location')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body stack">
+      <input type="hidden" id="loc-id" />
+      <div class="form-group"><label for="loc-name">Branch name <span class="muted">*</span></label><input id="loc-name" maxlength="60" placeholder="e.g. ANNA NAGAR" /></div>
+      <div class="form-group"><label for="loc-address">Address <span class="lbl-hint">— optional; Tara reads it out if asked</span></label><input id="loc-address" maxlength="200" placeholder="Street, area" /></div>
+      <div class="form-group">
+        <label>Days open <span class="muted">*</span></label>
+        <div class="day-picks" id="loc-days">
+          <label><input type="checkbox" value="0" /> Mon</label>
+          <label><input type="checkbox" value="1" /> Tue</label>
+          <label><input type="checkbox" value="2" /> Wed</label>
+          <label><input type="checkbox" value="3" /> Thu</label>
+          <label><input type="checkbox" value="4" /> Fri</label>
+          <label><input type="checkbox" value="5" /> Sat</label>
+          <label><input type="checkbox" value="6" /> Sun</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="loc-times">Session start times <span class="muted">*</span></label>
+        <input id="loc-times" placeholder="06:00, 07:00, 08:00, 09:00, 16:30, 17:30" />
+        <span class="hint">24-hour times, separated by commas. Each session is one hour, so 06:00–09:00 starts means classes 6–10 AM.</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-location')">Cancel</button>
+      <button class="btn btn-primary" id="loc-save" onclick="saveLocation()">Save location</button>
     </div>
   </div>
 </div>
@@ -1144,6 +1247,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 const PAGE_TITLES = {
+  'users': 'Users',
   'dashboard': 'Dashboard', 'campaigns': 'Campaigns', 'appointments': 'Trial bookings',
   'missed': 'Missed classes', 'call-logs': 'Call logs', 'crm': 'Contacts',
   'settings': 'Settings', 'live-logs': 'Live logs',
@@ -1183,6 +1287,7 @@ function onPageLoad(page) {
   if (page === 'call-logs')    { loadCalls(1); }
   if (page === 'crm')          { loadCRM(); }
   if (page === 'settings')     { loadSettings(); }
+  if (page === 'users')        { loadUsers(); }
   if (page === 'live-logs')    { loadLogs(); }
 }
 
@@ -1228,46 +1333,68 @@ async function loadDashboard() {
 
 async function loadBusinessFacts() {
   try {
-    const b = await ensureBusiness();
+    BUSINESS = await api('/business');   // always fresh: locations are editable
+    const b = BUSINESS;
     const row = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
     document.getElementById('biz-meta').innerHTML =
-      row('Business', b.name) +
-      row('Assistant', `${b.assistant} (voice: ${b.voice})`) +
-      row('Branches', b.branches.join(', ')) +
-      row('Trial start times', b.session_times.join(', ') + ' · one hour each') +
-      row('Closed', b.closed_days.join(', ') || '—');
+      row('Business', b.name) + row('Assistant', `${b.assistant} (voice: ${b.voice})`);
     document.getElementById('biz-facts').textContent = b.facts;
+    renderLocations(b.locations || []);
   } catch(e) { document.getElementById('biz-facts').textContent = 'Could not load business information.'; }
 }
 
-async function loadRecentCalls() {
-  try {
-    const calls = await api('/calls?limit=8');
-    const tbody = document.querySelector('#tbl-recent tbody');
-    tbody.innerHTML = calls.slice(0,8).map(c => `
-      <tr>
-        <td><strong>${esc(c.lead_name || '—')}</strong></td>
-        <td class="nowrap">${esc(c.phone_number)}</td>
-        <td>${badge(c.outcome, prettyOutcome(c.outcome))}</td>
-        <td class="num">${fmtDur(c.duration_seconds)}</td>
-        <td class="muted nowrap">${fmtTime(c.timestamp)}</td>
-      </tr>`).join('') || emptyRow(5, 'No calls yet', 'Place your first call from Campaigns.', 'phone');
-  } catch(e) {}
+let locationsById = {};
+function renderLocations(locs) {
+  locationsById = {};
+  locs.forEach(l => { locationsById[l.id] = l; });
+  document.getElementById('locations-body').innerHTML = locs.map(l => `
+    <tr>
+      <td><strong>${esc(l.name)}</strong>${l.address ? `<div class="hint">${esc(l.address)}</div>` : ''}</td>
+      <td>${esc(l.days_text)}</td>
+      <td>${esc(l.hours_text)}</td>
+      <td class="muted">${esc(l.slot_times.join(', '))}</td>
+      <td><div class="row-actions">
+        <button class="btn btn-outline btn-sm" onclick="openLocationModal(${jsArg(l.id)})">${icon('edit')}Edit</button>
+        <button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete location" onclick="deleteLocation(${jsArg(l.id)})">${icon('trash')}</button>
+      </div></td>
+    </tr>`).join('') || emptyRow(5, 'No locations yet', 'Add a branch so Tara can book trials there.', 'calendar');
 }
 
-async function exportRecentCalls() {
-  try {
-    const calls = await api('/calls?limit=200');
-    if (!calls.length) { toast('No calls to export', false); return; }
-    const head = ['Time','Name','Phone','Outcome','Duration (s)'];
-    const rows = calls.map(c => [fmtTime(c.timestamp), c.lead_name||'', c.phone_number||'', c.outcome||'', c.duration_seconds||0]);
-    const csv = [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `fitcamp-calls-${istDateStamp()}.csv`;
-    a.click(); URL.revokeObjectURL(a.href);
-    toast(`Exported ${calls.length} calls`);
-  } catch(e) { toast('Export failed: ' + e.message, false); }
+function openLocationModal(id) {
+  const l = (id && locationsById[id]) || { name: '', address: '', days: [0, 1, 2, 3, 4, 5], slot_times: [] };
+  document.getElementById('loc-title').textContent = id ? 'Edit ' + l.name : 'Add location';
+  document.getElementById('loc-id').value = id || '';
+  document.getElementById('loc-name').value = l.name;
+  document.getElementById('loc-address').value = l.address || '';
+  document.querySelectorAll('#loc-days input').forEach(c => { c.checked = l.days.includes(Number(c.value)); });
+  document.getElementById('loc-times').value = l.slot_times.join(', ');
+  openModal('modal-location');
+  setTimeout(() => document.getElementById('loc-name').focus(), 50);
+}
+
+async function saveLocation() {
+  const id = document.getElementById('loc-id').value;
+  const body = {
+    name: document.getElementById('loc-name').value.trim(),
+    address: document.getElementById('loc-address').value.trim(),
+    days: [...document.querySelectorAll('#loc-days input:checked')].map(c => Number(c.value)),
+    slot_times: document.getElementById('loc-times').value,
+  };
+  await withBusy(document.getElementById('loc-save'), async () => {
+    try {
+      await api(id ? '/locations/' + id : '/locations', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      toast(id ? 'Location updated' : 'Location added');
+      closeModal('modal-location');
+      loadBusinessFacts();
+    } catch(e) { toast(e.message, false); }
+  });
+}
+
+async function deleteLocation(id) {
+  const l = locationsById[id];
+  if (!confirm(`Delete ${l ? l.name : 'this location'}? Tara will stop offering trials there. Existing bookings are kept.`)) return;
+  try { await api('/locations/' + id, { method: 'DELETE' }); toast('Location deleted'); loadBusinessFacts(); }
+  catch(e) { toast(e.message, false); }
 }
 
 // ── Campaigns: call one person, or upload a call list ───────────────────────
@@ -1406,12 +1533,20 @@ async function loadAppointments() {
 }
 
 async function openAddApptModal() {
-  try { await ensureBusiness(); } catch(e) { toast(e.message, false); return; }
+  try { BUSINESS = await api('/business'); } catch(e) { toast(e.message, false); return; }
+  if (!BUSINESS.locations.length) { toast('Add a location on the Dashboard first', false); return; }
   ['appt-name', 'appt-phone', 'appt-date'].forEach(id => { document.getElementById(id).value = ''; });
-  const opts = list => list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
-  document.getElementById('appt-time').innerHTML = opts(BUSINESS.session_times);
-  document.getElementById('appt-location').innerHTML = opts(BUSINESS.branches);
+  document.getElementById('appt-location').innerHTML =
+    BUSINESS.locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('');
+  onApptLocationChange();
   openModal('modal-appt');
+}
+
+function onApptLocationChange() {
+  const name = document.getElementById('appt-location').value;
+  const loc = (BUSINESS.locations || []).find(l => l.name === name);
+  document.getElementById('appt-time').innerHTML = (loc ? loc.slot_times : [])
+    .map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
 }
 
 async function createAppt() {
@@ -1824,9 +1959,87 @@ function fmtDayLabel(dateStr) {
   });
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Signed-in user and role ──────────────────────────────────────────────────
+let ME = { username: '', role: '' };
+const isAdmin = () => ME.role === 'admin';
+
+async function loadMe() {
+  try { ME = await api('/auth/me'); } catch { ME = { username: '', role: '' }; }
+  document.body.classList.toggle('is-admin', isAdmin());
+  document.getElementById('signed-in').innerHTML = ME.username
+    ? `Signed in as <b>${esc(ME.username)}</b> · ${esc(ME.role)}` : '';
+}
+
+// ── Users (admin only) ────────────────────────────────────────────────────────
+let usersById = {};
+async function loadUsers() {
+  try {
+    const r = await api('/users');
+    usersById = {};
+    r.users.forEach(u => { usersById[u.id] = u; });
+    const builtin = !r.builtin_admin ? '' : `<tr>
+        <td><strong>${esc(r.builtin_admin)}</strong><div class="hint">Built-in admin — change its password from the sidebar</div></td>
+        <td>${badge('admin', 'Admin')}</td><td class="muted">—</td><td></td>
+      </tr>`;
+    document.getElementById('users-body').innerHTML = builtin + r.users.map(u => `
+      <tr>
+        <td><strong>${esc(u.username)}</strong>${u.username === r.me ? ' <span class="hint">(you)</span>' : ''}</td>
+        <td>${badge(u.role, u.role === 'admin' ? 'Admin' : 'Employee')}</td>
+        <td class="muted nowrap">${fmtTime(u.created_at)}</td>
+        <td><div class="row-actions">
+          <button class="btn btn-outline btn-sm" onclick="openUserModal(${jsArg(u.id)})">${icon('edit')}Edit</button>
+          ${u.username === r.me ? '' : `<button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete user" onclick="deleteUser(${jsArg(u.id)})">${icon('trash')}</button>`}
+        </div></td>
+      </tr>`).join('');
+  } catch(e) { toast('Could not load users: ' + e.message, false); }
+}
+
+function openUserModal(id) {
+  const u = id ? usersById[id] : null;
+  document.getElementById('user-title').textContent = u ? 'Edit ' + u.username : 'Add user';
+  document.getElementById('user-sub').textContent = u
+    ? 'Change their role, or set a new password. Changes apply within a minute.'
+    : 'They sign in with this username and password.';
+  document.getElementById('user-id').value = id || '';
+  const name = document.getElementById('user-name');
+  name.value = u ? u.username : '';
+  name.disabled = !!u;
+  document.getElementById('user-pass').value = '';
+  document.getElementById('user-pass-label').innerHTML = u ? 'New password <span class="lbl-hint">— leave blank to keep the current one</span>' : 'Password <span class="muted">*</span>';
+  document.getElementById('user-role').value = u ? u.role : 'employee';
+  openModal('modal-user');
+  setTimeout(() => (u ? document.getElementById('user-pass') : name).focus(), 50);
+}
+
+async function saveUser() {
+  const id = document.getElementById('user-id').value;
+  const body = { role: document.getElementById('user-role').value };
+  const password = document.getElementById('user-pass').value;
+  if (!id) body.username = document.getElementById('user-name').value.trim();
+  if (password || !id) body.password = password;
+  await withBusy(document.getElementById('user-save'), async () => {
+    try {
+      await api(id ? '/users/' + id : '/users', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      toast(id ? 'User updated' : 'User added');
+      closeModal('modal-user');
+      loadUsers();
+    } catch(e) { toast(e.message, false); }
+  });
+}
+
+async function deleteUser(id) {
+  const u = usersById[id];
+  if (!confirm(`Delete ${u ? u.username : 'this user'}? They will be signed out within a minute.`)) return;
+  try { await api('/users/' + id, { method: 'DELETE' }); toast('User deleted'); loadUsers(); }
+  catch(e) { toast(e.message, false); }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
 syncThemeButton();
-go((location.hash || '#dashboard').slice(1), false);
+loadMe().then(() => {
+  const page = (location.hash || '#dashboard').slice(1);
+  go(page === 'users' && !isAdmin() ? 'dashboard' : page, false);
+});
 </script>
 </body>
 </html>

@@ -19,12 +19,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 load_dotenv(override=False)
 
 from business import (
-    ASSISTANT_NAME, BRANCHES, BUSINESS_NAME, CAMPAIGNS, CLOSED_WEEKDAYS, DEFAULT_VOICE, FACTS,
-    MISSED_CLASS, MISSED_REASONS, SESSION_TIMES, TRIAL, campaign_or_default,
+    ASSISTANT_NAME, BUSINESS_NAME, CAMPAIGNS, DEFAULT_VOICE, FACTS, MISSED_CLASS, MISSED_REASONS,
+    TRIAL, campaign_or_default, describe_days, describe_hours,
 )
 from prompts import build_prompt
-
-_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 from db import (
     init_db, log_error, now_local, get_all_settings, get_logs, clear_errors,
     TrialSlotUnavailable, book_trial, get_all_trials, cancel_trial, next_free_trial_slots,
@@ -36,6 +34,8 @@ from db import (
     mark_campaign_contact, count_campaign_contacts_by_status,
     get_contact_memory, add_contact_memory,
     add_dnc, remove_dnc, list_dnc, get_month_to_date_spend,
+    get_locations, create_location, update_location, delete_location,
+    list_users, get_user, insert_user, update_user_fields, delete_user, ROLES,
 )
 import compliance
 from observability import langfuse_status
@@ -65,6 +65,26 @@ if _allowed_origins:
 # Everything is behind the session cookie except this small public allowlist:
 # the login endpoints, logout, health check, and the favicon.
 PUBLIC_PATHS = {"/login", "/logout", "/health", "/favicon.ico"}
+# Paths only the admin role may use. Spend figures are also stripped for employees (see _hide_cost).
+ADMIN_ONLY_PREFIXES = ("/users",)
+
+
+def _is_admin(request: Request) -> bool:
+    return getattr(request.state, "role", None) == auth.ADMIN
+
+
+_COST_FIELDS = ("estimated_cost", "total_cost", "cost_per_call")
+
+
+def _hide_cost(request: Request, data):
+    """Remove spend figures from a response for anyone who isn't an admin."""
+    if _is_admin(request):
+        return data
+    if isinstance(data, list):
+        return [_hide_cost(request, row) for row in data]
+    if isinstance(data, dict):
+        return {k: _hide_cost(request, v) for k, v in data.items() if k not in _COST_FIELDS}
+    return data
 
 
 @app.middleware("http")
@@ -75,9 +95,14 @@ async def require_login(request: Request, call_next):
         return await call_next(request)
 
     token = request.cookies.get(auth.SESSION_COOKIE_NAME, "")
-    user = auth.verify_session_token(token)
-    if user:
-        request.state.user = user
+    username = auth.verify_session_token(token)
+    principal = await auth.resolve_principal(username) if username else None
+    if principal:
+        request.state.user = principal["username"]
+        request.state.role = principal["role"]
+        request.state.builtin = principal["builtin"]
+        if path.startswith(ADMIN_ONLY_PREFIXES) and principal["role"] != auth.ADMIN:
+            return JSONResponse({"detail": "Only admins can do that"}, status_code=403)
         return await call_next(request)
 
     # Unauthenticated: send browsers to the login page, APIs a 401 they can handle.
@@ -349,12 +374,13 @@ async def login(request: Request):
         body = {}
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
-    if not await auth.verify_credentials(username, password):
+    principal = await auth.authenticate(username, password)
+    if not principal:
         auth.record_failure(ip)
         logger.warning("Failed login for '%s' from %s", username, ip)
         raise HTTPException(401, "Invalid username or password")
     auth.reset_failures(ip)
-    token = auth.create_session_token(username)
+    token = auth.create_session_token(principal["username"])
     response = JSONResponse({"ok": True})
     auth.set_session_cookie(response, token)
     return response
@@ -376,11 +402,27 @@ async def logout_get():
 
 @app.get("/auth/me")
 async def auth_me(request: Request):
-    return {"username": getattr(request.state, "user", None)}
+    return {"username": getattr(request.state, "user", None), "role": getattr(request.state, "role", None)}
+
+
+async def auth_user_row(username: str) -> Optional[dict]:
+    from db import get_user_by_username
+    return await get_user_by_username(username)
 
 
 @app.post("/auth/change-password")
 async def change_password(request: Request):
+    if not getattr(request.state, "builtin", True):
+        body = await request.json()
+        user = await auth_user_row(request.state.user)
+        if not user or not auth.verify_password(body.get("current_password") or "", user["password_hash"]):
+            raise HTTPException(401, "Current password is incorrect")
+        try:
+            new = auth.check_new_password(body.get("new_password") or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        await update_user_fields(user["id"], {"password_hash": auth.hash_password(new)})
+        return {"ok": True}
     if auth.is_password_env_managed():
         raise HTTPException(
             409,
@@ -401,6 +443,74 @@ async def change_password(request: Request):
     response = JSONResponse({"ok": True})
     auth.set_session_cookie(response, auth.create_session_token(username))
     return response
+
+
+# ── Users (admin only — see ADMIN_ONLY_PREFIXES) ─────────────────────────────
+
+@app.get("/users")
+async def get_users(request: Request):
+    users = await list_users()
+    builtin = await auth.get_admin_username()
+    # A users-table login with the same name takes precedence, so don't list the built-in one.
+    if any(u["username"] == builtin.lower() for u in users):
+        builtin = None
+    return {"builtin_admin": builtin, "me": request.state.user, "users": users}
+
+
+@app.post("/users")
+async def add_user(request: Request):
+    body = await request.json()
+    try:
+        username = auth.clean_username(body.get("username"))
+        password = auth.check_new_password(body.get("password") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    role = body.get("role") or auth.EMPLOYEE
+    if role not in ROLES:
+        raise HTTPException(400, "role must be admin or employee")
+    from db import get_user_by_username
+    if username == (await auth.get_admin_username()).lower() or await get_user_by_username(username):
+        raise HTTPException(409, f"The username {username} is already taken")
+    user_id = await insert_user(username, auth.hash_password(password), role)
+    auth.forget_principal(username)
+    return {"id": user_id, "status": "created"}
+
+
+@app.put("/users/{user_id}")
+async def edit_user(user_id: str, request: Request):
+    body = await request.json()
+    user = await get_user(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    fields: dict = {}
+    if body.get("role"):
+        if body["role"] not in ROLES:
+            raise HTTPException(400, "role must be admin or employee")
+        if user["username"] == request.state.user and body["role"] != auth.ADMIN:
+            raise HTTPException(409, "You can't remove your own admin role")
+        fields["role"] = body["role"]
+    if body.get("password"):
+        try:
+            fields["password_hash"] = auth.hash_password(auth.check_new_password(body["password"]))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    if not fields:
+        raise HTTPException(400, "Nothing to change")
+    await update_user_fields(user_id, fields)
+    auth.forget_principal(user["username"])
+    return {"status": "updated"}
+
+
+@app.delete("/users/{user_id}")
+async def remove_user(user_id: str, request: Request):
+    user = await get_user(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user["username"] == request.state.user:
+        raise HTTPException(409, "You can't delete yourself")
+    await delete_user(user_id)
+    auth.forget_principal(user["username"])
+    return {"status": "deleted"}
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -437,16 +547,54 @@ _DISPATCH_ERRORS = {
 }
 
 
+def _with_descriptions(locations: list) -> list:
+    return [{**loc, "days_text": describe_days(loc["days"]), "hours_text": describe_hours(loc["slot_times"])}
+            for loc in locations]
+
+
 @app.get("/business")
 async def business_info():
-    """The fixed business setup (from business.py), so the dashboard never duplicates it."""
+    """The business setup: fixed facts from business.py plus the branches from the database."""
     return {
-        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME, "voice": DEFAULT_VOICE,
-        "branches": list(BRANCHES), "session_times": list(SESSION_TIMES),
-        "closed_days": [_WEEKDAYS[d] for d in sorted(CLOSED_WEEKDAYS)], "facts": FACTS,
+        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME, "voice": DEFAULT_VOICE, "facts": FACTS,
+        "locations": _with_descriptions(await get_locations()),
         "campaigns": [{"key": k, **v} for k, v in CAMPAIGNS.items()],
         "missed_reasons": MISSED_REASONS,
     }
+
+
+# ── Locations (branches and their timings) ────────────────────────────────────
+
+@app.get("/locations")
+async def list_locations():
+    return _with_descriptions(await get_locations())
+
+
+@app.post("/locations")
+async def add_location(request: Request):
+    try:
+        location_id = await create_location(await request.json())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"id": location_id, "status": "created"}
+
+
+@app.put("/locations/{location_id}")
+async def edit_location(location_id: str, request: Request):
+    try:
+        ok = await update_location(location_id, await request.json())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not ok:
+        raise HTTPException(404, "Branch not found")
+    return {"status": "updated"}
+
+
+@app.delete("/locations/{location_id}")
+async def remove_location(location_id: str):
+    if not await delete_location(location_id):
+        raise HTTPException(404, "Branch not found")
+    return {"status": "deleted"}
 
 
 @app.get("/prompts/{campaign}")
@@ -455,7 +603,8 @@ async def campaign_prompt(campaign: str):
     missed date) are shown as [placeholders]; today's date is filled in at call time."""
     if campaign not in CAMPAIGNS:
         raise HTTPException(404, "Unknown campaign")
-    prompt = build_prompt(campaign, "[name]", caller_phone="[their number]", missed_date="[missed date]")
+    prompt = build_prompt(campaign, "[name]", caller_phone="[their number]", missed_date="[missed date]",
+                          locations=await get_locations())
     return {"campaign": campaign, "label": CAMPAIGNS[campaign]["label"], "prompt": prompt}
 
 
@@ -600,9 +749,9 @@ async def remove_missed_class(row_id: str):
 
 @app.get("/calls")
 async def list_calls(
-    page: int = Query(1), limit: int = Query(20), campaign: Optional[str] = Query(None),
+    request: Request, page: int = Query(1), limit: int = Query(20), campaign: Optional[str] = Query(None),
 ):
-    return await get_all_calls(page=page, limit=limit, campaign=campaign or None)
+    return _hide_cost(request, await get_all_calls(page=page, limit=limit, campaign=campaign or None))
 
 
 @app.post("/calls/recordings/sync")
@@ -649,8 +798,8 @@ async def list_contacts():
 
 
 @app.get("/contacts/{phone}/history")
-async def contact_history(phone: str):
-    calls = await get_calls_by_phone(phone)
+async def contact_history(phone: str, request: Request):
+    calls = _hide_cost(request, await get_calls_by_phone(phone))
     memories = await get_contact_memory(phone)
     return {"phone": phone, "calls": calls, "memories": memories}
 
@@ -668,8 +817,8 @@ async def add_memory(phone: str, request: Request):
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 @app.get("/stats")
-async def stats():
-    return await get_stats()
+async def stats(request: Request):
+    return _hide_cost(request, await get_stats())
 
 # ── Settings (read-only view of env) ───────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ Single source of truth for configuration: VPS environment variables.
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -15,9 +16,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from business import (
-    BRANCHES, BRANCH_ALIASES, CLOSED_WEEKDAYS, MISSED_REASONS, SESSION_MINUTES, SESSION_TIMES,
-)
+from business import MISSED_REASONS, SESSION_MINUTES, location_key
 
 logger = logging.getLogger("outbound-db")
 
@@ -167,6 +166,54 @@ async def get_stored_setting(key: str, default: str = "") -> str:
     return default
 
 
+# ── Dashboard users ───────────────────────────────────────────────────────────
+# Extra logins created by an admin. Password hashing lives in auth.py; this layer
+# only stores and fetches rows. The built-in admin is not in this table.
+
+ROLES = ("admin", "employee")
+
+
+async def list_users() -> list:
+    db = await _adb()
+    rows = (await db.table("users").select("id, username, role, created_at").order("created_at").execute()).data
+    return rows or []
+
+
+async def get_user(user_id: str) -> Optional[dict]:
+    db = await _adb()
+    rows = (await db.table("users").select("*").eq("id", user_id).limit(1).execute()).data or []
+    return rows[0] if rows else None
+
+
+async def get_user_by_username(username: str) -> Optional[dict]:
+    db = await _adb()
+    # Usernames are stored lower-case (see auth.clean_username), so an exact match is enough.
+    rows = (await db.table("users").select("*").eq("username", (username or "").strip().lower()).limit(1).execute()).data
+    return rows[0] if rows else None
+
+
+async def insert_user(username: str, password_hash: str, role: str) -> str:
+    user_id = str(uuid.uuid4())
+    db = await _adb()
+    await db.table("users").insert({
+        "id": user_id, "username": username, "password_hash": password_hash,
+        "role": role, "created_at": _now_iso(),
+    }).execute()
+    return user_id
+
+
+async def update_user_fields(user_id: str, fields: dict) -> bool:
+    db = await _adb()
+    result = await db.table("users").update(fields).eq("id", user_id).execute()
+    return len(result.data or []) > 0
+
+
+async def delete_user(user_id: str) -> bool:
+    db = await _adb()
+    result = await db.table("users").delete().eq("id", user_id).execute()
+    return len(result.data or []) > 0
+
+
 # ── Error / event logs ────────────────────────────────────────────────────────
 
 async def log_error(source: str, message: str, detail: str = "", level: str = "error") -> None:
@@ -253,50 +300,128 @@ async def list_dnc() -> list:
     return result.data or []
 
 
-# ── Trial bookings ────────────────────────────────────────────────────────────
-# One-hour trials at fixed start times (business.SESSION_TIMES), one per branch per
-# slot, closed on business.CLOSED_WEEKDAYS. A unique index on (location, date, time)
-# for booked rows (migration 0004) stops two calls taking the same slot at once.
-
-class TrialSlotUnavailable(Exception):
-    pass
-
-
-def normalize_branch(location: str) -> str:
-    """Map what the caller/model said to a branch name, or raise ValueError."""
-    key = " ".join((location or "").upper().replace(".", "").split())
-    if key in BRANCH_ALIASES:
-        return BRANCH_ALIASES[key]
-    raise ValueError("the branch must be " + " or ".join(BRANCHES))
-
+# ── Locations (branches) ──────────────────────────────────────────────────────
+# Each branch has the weekdays it is open and the start times of its one-hour
+# sessions. Edited from the dashboard; read by booking and by the call scripts.
 
 def _normalize_time(time: str) -> str:
     """Accept '6:00', '06:00' or '16:30' and return zero-padded HH:MM."""
     try:
         hh, mm = str(time).strip().split(":")
-        return f"{int(hh):02d}:{int(mm):02d}"
+        h, m = int(hh), int(mm)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError
+        return f"{h:02d}:{m:02d}"
     except Exception as exc:
         raise ValueError("time must use HH:MM (24-hour)") from exc
 
 
-def validate_trial_slot(date: str, time: str, location: str,
+def _loads_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    try:
+        out = json.loads(value or "[]")
+        return out if isinstance(out, list) else []
+    except Exception:
+        return []
+
+
+def _parse_location(row: dict) -> dict:
+    return {
+        "id": row.get("id"), "name": row.get("name") or "", "address": row.get("address") or "",
+        "days": sorted({int(d) for d in _loads_list(row.get("days")) if str(d).isdigit() and 0 <= int(d) <= 6}),
+        "slot_times": sorted({t for t in _loads_list(row.get("slot_times")) if isinstance(t, str)}),
+    }
+
+
+def clean_location(body: dict) -> dict:
+    """Validate a location from the dashboard. Raises ValueError with a readable message."""
+    name = " ".join(str(body.get("name") or "").split())
+    if not name:
+        raise ValueError("the branch name is required")
+    days = sorted({int(d) for d in (body.get("days") or []) if str(d).strip().isdigit() and 0 <= int(d) <= 6})
+    if not days:
+        raise ValueError("pick at least one day the branch is open")
+    raw_times = body.get("slot_times") or []
+    if isinstance(raw_times, str):
+        raw_times = raw_times.replace(";", ",").split(",")
+    times = sorted({_normalize_time(t) for t in raw_times if str(t).strip()})
+    if not times:
+        raise ValueError("add at least one session start time")
+    return {"name": name.upper(), "address": " ".join(str(body.get("address") or "").split()) or None,
+            "days": json.dumps(days), "slot_times": json.dumps(times)}
+
+
+async def get_locations() -> list:
+    db = await _adb()
+    rows = (await db.table("locations").select("*").order("created_at").order("name").execute()).data or []
+    return [_parse_location(r) for r in rows]
+
+
+async def create_location(body: dict) -> str:
+    row = clean_location(body)
+    if any(location_key(l["name"]) == location_key(row["name"]) for l in await get_locations()):
+        raise ValueError(f"a branch called {row['name']} already exists")
+    row.update({"id": str(uuid.uuid4()), "created_at": _now_iso()})
+    db = await _adb()
+    await db.table("locations").insert(row).execute()
+    return row["id"]
+
+
+async def update_location(location_id: str, body: dict) -> bool:
+    row = clean_location(body)
+    if any(l["id"] != location_id and location_key(l["name"]) == location_key(row["name"])
+           for l in await get_locations()):
+        raise ValueError(f"a branch called {row['name']} already exists")
+    db = await _adb()
+    result = await db.table("locations").update(row).eq("id", location_id).execute()
+    return len(result.data or []) > 0
+
+
+async def delete_location(location_id: str) -> bool:
+    db = await _adb()
+    result = await db.table("locations").delete().eq("id", location_id).execute()
+    return len(result.data or []) > 0
+
+
+# ── Trial bookings ────────────────────────────────────────────────────────────
+# One-hour trials at each branch's start times, on the days it is open, one per
+# branch per slot. A unique index on (location, date, time) for booked rows
+# (migration 0004) stops two calls taking the same slot at once.
+
+class TrialSlotUnavailable(Exception):
+    pass
+
+
+def find_location(location: str, locations: list) -> dict:
+    """Match what the caller/model said to a branch, or raise ValueError."""
+    if not locations:
+        raise ValueError("no branches are set up for bookings")
+    key = location_key(location)
+    for loc in locations:
+        if location_key(loc["name"]) == key:
+            return loc
+    raise ValueError("the branch must be " + " or ".join(l["name"] for l in locations))
+
+
+def validate_trial_slot(date: str, time: str, location: str, locations: list,
                         now: Optional[datetime] = None) -> tuple[str, str, str]:
-    """Check a requested trial against the schedule. Returns (date, time, branch)
-    normalised, or raises ValueError explaining what to fix."""
-    branch = normalize_branch(location)
+    """Check a requested trial against that branch's schedule. Returns (date, time,
+    branch name) normalised, or raises ValueError explaining what to fix."""
+    loc = find_location(location, locations)
     time = _normalize_time(time)
     try:
         start = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError as exc:
         raise ValueError("date must use YYYY-MM-DD") from exc
-    if start.weekday() in CLOSED_WEEKDAYS:
-        raise ValueError("Harry's Fitcamp is closed that day")
-    if time not in SESSION_TIMES:
-        raise ValueError("trials start at " + ", ".join(SESSION_TIMES))
+    if start.weekday() not in loc["days"]:
+        raise ValueError(f"{loc['name']} is closed that day")
+    if time not in loc["slot_times"]:
+        raise ValueError(f"trials at {loc['name']} start at " + ", ".join(loc["slot_times"]))
     now = (now or now_local()).replace(tzinfo=None)
     if start <= now:
         raise ValueError("the slot must be in the future")
-    return start.strftime("%Y-%m-%d"), time, branch
+    return start.strftime("%Y-%m-%d"), time, loc["name"]
 
 
 async def _booked_times(date: str, branch: str) -> set:
@@ -309,13 +434,13 @@ async def _booked_times(date: str, branch: str) -> set:
 
 
 async def is_trial_slot_free(date: str, time: str, location: str) -> bool:
-    date, time, branch = validate_trial_slot(date, time, location)
+    date, time, branch = validate_trial_slot(date, time, location, await get_locations())
     return time not in await _booked_times(date, branch)
 
 
 async def next_free_trial_slots(date: str, time: str, location: str, limit: int = 3) -> list[str]:
     """The next few free start times at the same branch, from the requested time on."""
-    branch = normalize_branch(location)
+    loc = find_location(location, await get_locations())
     now = now_local().replace(tzinfo=None)
     try:
         start = datetime.strptime(f"{date} {_normalize_time(time)}", "%Y-%m-%d %H:%M")
@@ -325,13 +450,13 @@ async def next_free_trial_slots(date: str, time: str, location: str, limit: int 
     found: list[str] = []
     for day_offset in range(15):
         day = (start + timedelta(days=day_offset)).date()
-        if day.weekday() in CLOSED_WEEKDAYS:
+        if day.weekday() not in loc["days"]:
             continue
-        taken = await _booked_times(day.isoformat(), branch)
-        for slot in SESSION_TIMES:
+        taken = await _booked_times(day.isoformat(), loc["name"])
+        for slot in loc["slot_times"]:
             candidate = datetime.strptime(f"{day.isoformat()} {slot}", "%Y-%m-%d %H:%M")
             if candidate > start and slot not in taken:
-                found.append(f"{day.isoformat()} at {slot} ({branch})")
+                found.append(f"{day.isoformat()} at {slot} ({loc['name']})")
                 if len(found) >= limit:
                     return found
     return found
@@ -344,7 +469,7 @@ def _is_unique_violation(exc: Exception) -> bool:
 async def book_trial(name: str, phone: str, date: str, time: str, location: str) -> dict:
     """Book a one-hour trial. Returns {booking_id, date, time, location}; raises
     ValueError for an invalid request and TrialSlotUnavailable if it is taken."""
-    date, time, branch = validate_trial_slot(date, time, location)
+    date, time, branch = validate_trial_slot(date, time, location, await get_locations())
     if not (name or "").strip():
         raise ValueError("the caller's name is required")
     if not (phone or "").strip():

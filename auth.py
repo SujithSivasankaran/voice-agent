@@ -1,5 +1,6 @@
 """
-Authentication for the admin dashboard — single-admin, password + signed session cookie.
+Authentication for the dashboard — a built-in admin plus admin-created users with an
+"admin" or "employee" role; password + signed session cookie.
 
 Design (industry-standard for an internal same-origin dashboard):
 - Passwords are bcrypt-hashed; plaintext is never stored.
@@ -160,6 +161,73 @@ async def verify_credentials(username: str, password: str) -> bool:
 async def set_admin_password(new_password: str) -> None:
     from db import set_setting
     await set_setting("auth_admin_password_hash", hash_password(new_password))
+
+
+# ── Users and roles ───────────────────────────────────────────────────────────
+# Two roles: "admin" (everything) and "employee" (no spend figures, no user
+# management). The built-in admin above is always an admin; everyone else lives in
+# the `users` table, managed by an admin from the dashboard.
+
+ADMIN, EMPLOYEE = "admin", "employee"
+MIN_PASSWORD_LENGTH = 10
+_USERNAME_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+
+# username -> (expires_at, principal or None). Short TTL so a deleted user or a role
+# change takes effect within seconds, without a DB read on every request.
+_principal_cache: dict[str, tuple[float, dict | None]] = {}
+_PRINCIPAL_TTL = 30.0
+
+
+def clean_username(username: str) -> str:
+    name = (username or "").strip().lower()
+    if not (3 <= len(name) <= 32) or not set(name) <= _USERNAME_CHARS:
+        raise ValueError("username must be 3–32 characters: letters, numbers, dot, dash or underscore")
+    return name
+
+
+def check_new_password(password: str) -> str:
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+    return password
+
+
+def forget_principal(username: str) -> None:
+    _principal_cache.pop((username or "").strip().lower(), None)
+
+
+async def authenticate(username: str, password: str) -> dict | None:
+    """Check a login. Returns {"username", "role", "builtin"} or None."""
+    from db import get_user_by_username
+    user = await get_user_by_username(username)
+    if user:
+        if verify_password(password, user.get("password_hash") or ""):
+            return {"username": user["username"], "role": user.get("role") or EMPLOYEE, "builtin": False}
+        return None
+    if await verify_credentials(username, password):
+        return {"username": (username or "").strip(), "role": ADMIN, "builtin": True}
+    return None
+
+
+async def resolve_principal(username: str) -> dict | None:
+    """Who a valid session belongs to right now: their current role, or None if the
+    user has been deleted."""
+    key = (username or "").strip().lower()
+    hit = _principal_cache.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
+    from db import get_user_by_username
+    principal = None
+    try:
+        user = await get_user_by_username(username)
+        if user:
+            principal = {"username": user["username"], "role": user.get("role") or EMPLOYEE, "builtin": False}
+        elif (username or "").strip() == await get_admin_username():
+            principal = {"username": username, "role": ADMIN, "builtin": True}
+    except Exception as exc:
+        logger.warning("Could not resolve user %s: %s", username, exc)
+        return hit[1] if hit else None   # keep a known session alive through a DB blip
+    _principal_cache[key] = (time.time() + _PRINCIPAL_TTL, principal)
+    return principal
 
 
 # ── Session tokens ────────────────────────────────────────────────────────────

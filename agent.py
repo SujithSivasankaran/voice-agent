@@ -32,7 +32,7 @@ from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
 from business import DEFAULT_VOICE, INBOUND, campaign_or_default
-from db import init_db, log_call, log_error
+from db import get_locations, init_db, log_call, log_error
 from prompts import OPENING_INSTRUCTION, build_greeting, build_inbound_prompt, build_prompt
 from tools import CallTools
 from observability import record_call_usage, setup_langfuse
@@ -414,10 +414,17 @@ async def entrypoint(ctx: agents.JobContext):
         await _log("info", f"📞 Incoming call from {phone_number or 'unknown caller'}")
 
     # ── System prompt: one fixed script per campaign ──────────────────────────
+    # Branches and their timings are edited from the dashboard, so load them fresh per call.
+    try:
+        locations = await get_locations()
+    except Exception as exc:
+        locations = []
+        await _log("error", f"Could not load branches for the call script: {exc}")
     if is_inbound:
-        system_prompt = build_inbound_prompt(caller_phone=phone_number)
+        system_prompt = build_inbound_prompt(caller_phone=phone_number, locations=locations)
     else:
-        system_prompt = build_prompt(campaign, lead_name, caller_phone=phone_number, missed_date=missed_date)
+        system_prompt = build_prompt(campaign, lead_name, caller_phone=phone_number,
+                                     missed_date=missed_date, locations=locations)
 
     # ── Build the agent session (before dialing, so its model connection can be
     #    warmed during the ring) ────────────────────────────────────────────────

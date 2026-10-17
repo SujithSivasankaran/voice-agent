@@ -63,13 +63,13 @@ class CallTools(llm.ToolContext):
     async def check_availability(self, date: str, time: str, location: str) -> str:
         """
         Check whether a trial slot is free before booking.
-        date: YYYY-MM-DD | time: HH:MM (24-hour) | location: ADAYAR or ECR
+        date: YYYY-MM-DD | time: HH:MM (24-hour) | location: the branch name
         """
         try:
             if await is_trial_slot_free(date, time, location):
                 return f"available: {date} at {time} at {location.upper()}"
             alternatives = await next_free_trial_slots(date, time, location)
-            choices = ", ".join(alternatives) or "none in the next two weeks — ask for another branch"
+            choices = ", ".join(alternatives) or "none in the next two weeks — suggest another branch"
             return f"unavailable: suggest one of these instead: {choices}"
         except ValueError as exc:
             return f"invalid request: {exc}. Ask the caller to choose again."
@@ -81,7 +81,7 @@ class CallTools(llm.ToolContext):
     async def book_trial(self, name: str, date: str, time: str, location: str, phone: str = "") -> str:
         """
         Book the free one-hour trial after the caller has confirmed every detail.
-        name: caller's name | date: YYYY-MM-DD | time: HH:MM (24-hour) | location: ADAYAR or ECR
+        name: caller's name | date: YYYY-MM-DD | time: HH:MM (24-hour) | location: the branch name
         phone: only if the caller's number is unknown or they want a different one
         """
         try:
