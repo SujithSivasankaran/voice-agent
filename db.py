@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from business import MISSED_REASONS, SESSION_MINUTES, location_key
+from business import (
+    MISSED_REASONS, SESSION_MINUTES, WEEKDAY_NAMES, location_key, schedule_from_slots, slots_for_weekday,
+)
 
 logger = logging.getLogger("outbound-db")
 
@@ -326,30 +328,54 @@ def _loads_list(value) -> list:
         return []
 
 
+def _days(values) -> list:
+    return sorted({int(d) for d in (values or []) if str(d).strip().isdigit() and 0 <= int(d) <= 6})
+
+
 def _parse_location(row: dict) -> dict:
-    return {
-        "id": row.get("id"), "name": row.get("name") or "", "address": row.get("address") or "",
-        "days": sorted({int(d) for d in _loads_list(row.get("days")) if str(d).isdigit() and 0 <= int(d) <= 6}),
-        "slot_times": sorted({t for t in _loads_list(row.get("slot_times")) if isinstance(t, str)}),
-    }
+    """A branch with its timings. Rows saved before per-day timings existed only have
+    `days` + `slot_times`; their timings are derived from those."""
+    schedule = []
+    for b in _loads_list(row.get("schedule")):
+        try:
+            schedule.append({"days": _days(b.get("days")), "start": _normalize_time(b["start"]),
+                             "end": _normalize_time(b["end"])})
+        except Exception:
+            continue
+    if not schedule:
+        legacy_times = sorted({t for t in _loads_list(row.get("slot_times")) if isinstance(t, str)})
+        schedule = schedule_from_slots(_days(_loads_list(row.get("days"))), legacy_times)
+    return {"id": row.get("id"), "name": row.get("name") or "", "address": row.get("address") or "",
+            "schedule": schedule}
 
 
 def clean_location(body: dict) -> dict:
-    """Validate a location from the dashboard. Raises ValueError with a readable message."""
+    """Validate a branch from the dashboard. `schedule` is a list of timings
+    {days, start, end}. Raises ValueError with a readable message."""
     name = " ".join(str(body.get("name") or "").split())
     if not name:
         raise ValueError("the branch name is required")
-    days = sorted({int(d) for d in (body.get("days") or []) if str(d).strip().isdigit() and 0 <= int(d) <= 6})
-    if not days:
-        raise ValueError("pick at least one day the branch is open")
-    raw_times = body.get("slot_times") or []
-    if isinstance(raw_times, str):
-        raw_times = raw_times.replace(";", ",").split(",")
-    times = sorted({_normalize_time(t) for t in raw_times if str(t).strip()})
-    if not times:
-        raise ValueError("add at least one session start time")
+    schedule = []
+    for i, b in enumerate(body.get("schedule") or [], start=1):
+        days = _days((b or {}).get("days"))
+        if not days:
+            raise ValueError(f"timing {i}: pick at least one day")
+        try:
+            start, end = _normalize_time(b.get("start")), _normalize_time(b.get("end"))
+        except ValueError as exc:
+            raise ValueError(f"timing {i}: enter a start and end time") from exc
+        if end <= start:
+            raise ValueError(f"timing {i}: the end time must be after the start time")
+        if int(end[:2]) * 60 + int(end[3:]) - (int(start[:2]) * 60 + int(start[3:])) < SESSION_MINUTES:
+            raise ValueError(f"timing {i}: must be at least {SESSION_MINUTES} minutes long")
+        schedule.append({"days": days, "start": start, "end": end})
+    if not schedule:
+        raise ValueError("add at least one timing")
+    # Also keep the older columns filled, so nothing that reads them breaks.
+    all_days = sorted({d for b in schedule for d in b["days"]})
+    all_times = sorted({t for d in all_days for t in slots_for_weekday(schedule, d)})
     return {"name": name.upper(), "address": " ".join(str(body.get("address") or "").split()) or None,
-            "days": json.dumps(days), "slot_times": json.dumps(times)}
+            "schedule": json.dumps(schedule), "days": json.dumps(all_days), "slot_times": json.dumps(all_times)}
 
 
 async def get_locations() -> list:
@@ -414,10 +440,11 @@ def validate_trial_slot(date: str, time: str, location: str, locations: list,
         start = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     except ValueError as exc:
         raise ValueError("date must use YYYY-MM-DD") from exc
-    if start.weekday() not in loc["days"]:
-        raise ValueError(f"{loc['name']} is closed that day")
-    if time not in loc["slot_times"]:
-        raise ValueError(f"trials at {loc['name']} start at " + ", ".join(loc["slot_times"]))
+    starts = slots_for_weekday(loc["schedule"], start.weekday())
+    if not starts:
+        raise ValueError(f"{loc['name']} is closed on {WEEKDAY_NAMES[start.weekday()]}")
+    if time not in starts:
+        raise ValueError(f"trials at {loc['name']} on {WEEKDAY_NAMES[start.weekday()]} start at " + ", ".join(starts))
     now = (now or now_local()).replace(tzinfo=None)
     if start <= now:
         raise ValueError("the slot must be in the future")
@@ -450,10 +477,11 @@ async def next_free_trial_slots(date: str, time: str, location: str, limit: int 
     found: list[str] = []
     for day_offset in range(15):
         day = (start + timedelta(days=day_offset)).date()
-        if day.weekday() not in loc["days"]:
+        starts = slots_for_weekday(loc["schedule"], day.weekday())
+        if not starts:
             continue
         taken = await _booked_times(day.isoformat(), loc["name"])
-        for slot in loc["slot_times"]:
+        for slot in starts:
             candidate = datetime.strptime(f"{day.isoformat()} {slot}", "%Y-%m-%d %H:%M")
             if candidate > start and slot not in taken:
                 found.append(f"{day.isoformat()} at {slot} ({loc['name']})")

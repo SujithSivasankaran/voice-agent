@@ -21,7 +21,7 @@ load_dotenv(override=False)
 
 from business import (
     ASSISTANT_NAME, BUSINESS_NAME, CAMPAIGNS, DEFAULT_VOICE, FACTS, MISSED_CLASS, MISSED_REASONS,
-    TRIAL, campaign_or_default, describe_days, describe_hours,
+    TRIAL, campaign_or_default, schedule_groups, slots_for_weekday,
 )
 from prompts import build_prompt
 from db import (
@@ -572,7 +572,11 @@ _DISPATCH_ERRORS = {
 
 
 def _with_descriptions(locations: list) -> list:
-    return [{**loc, "days_text": describe_days(loc["days"]), "hours_text": describe_hours(loc["slot_times"])}
+    """Add what the dashboard shows: timings grouped by days, and each weekday's trial
+    start times (Mon=0) for the booking form."""
+    return [{**loc,
+             "timings": [{"days": days, "hours": ranges} for days, ranges in schedule_groups(loc["schedule"])],
+             "slots_by_day": {wd: slots_for_weekday(loc["schedule"], wd) for wd in range(7)}}
             for loc in locations]
 
 

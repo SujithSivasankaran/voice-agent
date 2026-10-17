@@ -7,17 +7,23 @@ import pytest
 
 import db
 import prompts
-from business import MISSED_CLASS, TRIAL, campaign_or_default, describe_days, describe_hours
+from business import (MISSED_CLASS, TRIAL, campaign_or_default, describe_days, describe_schedule,
+                      schedule_from_slots, slots_for_weekday)
 
 # Thursday 2026-10-15, 10:00 local — a fixed "now" so the tests never depend on the clock.
 NOW = datetime(2026, 10, 15, 10, 0)
 
-TIMES = ["06:00", "07:00", "08:00", "09:00", "16:30", "17:30", "18:30", "19:30"]
+MON_SAT = [0, 1, 2, 3, 4, 5]
+MON_FRI = [0, 1, 2, 3, 4]
+STANDARD = [{"days": MON_SAT, "start": "06:00", "end": "10:00"}, {"days": MON_SAT, "start": "16:30", "end": "20:30"}]
 LOCS = [
-    {"id": "1", "name": "ADAYAR", "address": "", "days": [0, 1, 2, 3, 4, 5], "slot_times": TIMES},
-    {"id": "2", "name": "ECR", "address": "", "days": [0, 1, 2, 3, 4, 5], "slot_times": TIMES},
-    # A branch with its own schedule: weekday evenings only.
-    {"id": "3", "name": "ANNA NAGAR", "address": "2nd Avenue", "days": [0, 1, 2, 3, 4], "slot_times": ["18:00", "19:00"]},
+    {"id": "1", "name": "ADAYAR", "address": "", "schedule": STANDARD},
+    {"id": "2", "name": "ECR", "address": "", "schedule": STANDARD},
+    # A branch with different hours on Saturday, closed Sunday.
+    {"id": "3", "name": "ANNA NAGAR", "address": "2nd Avenue", "schedule": [
+        {"days": MON_FRI, "start": "18:00", "end": "20:00"},
+        {"days": [5], "start": "07:00", "end": "09:00"},
+    ]},
 ]
 
 
@@ -51,28 +57,26 @@ def test_no_branches_set_up():
 
 
 def test_closed_on_sunday():
-    with pytest.raises(ValueError, match="ECR is closed"):
+    with pytest.raises(ValueError, match="ECR is closed on Sunday"):
         slot("2026-10-18", "07:00", "ECR")  # a Sunday
 
 
-def test_saturday_is_open_at_adayar_but_not_anna_nagar():
-    assert slot("2026-10-17", "07:00", "ECR")[0] == "2026-10-17"
-    with pytest.raises(ValueError, match="ANNA NAGAR is closed"):
+def test_saturday_has_its_own_hours():
+    # 2026-10-17 is a Saturday: Anna Nagar is open 7–9 AM, not its weekday evening hours.
+    assert slot("2026-10-17", "07:00", "Anna Nagar")[1] == "07:00"
+    assert slot("2026-10-17", "08:00", "Anna Nagar")[1] == "08:00"
+    with pytest.raises(ValueError, match="ANNA NAGAR on Saturday start at 07:00, 08:00"):
         slot("2026-10-17", "18:00", "Anna Nagar")
+    # …and on a weekday the evening hours apply, the Saturday morning ones don't.
+    assert slot("2026-10-16", "19:00", "Anna Nagar")[1] == "19:00"
+    with pytest.raises(ValueError, match="ANNA NAGAR on Friday start at 18:00, 19:00"):
+        slot("2026-10-16", "07:00", "Anna Nagar")
 
 
 @pytest.mark.parametrize("time", ["10:00", "12:00", "16:00", "20:30", "05:00"])
 def test_only_that_branchs_start_times(time):
-    with pytest.raises(ValueError, match="trials at ECR start at"):
+    with pytest.raises(ValueError, match="trials at ECR on Friday start at"):
         slot("2026-10-16", time, "ECR")
-
-
-def test_each_branch_has_its_own_times():
-    assert slot("2026-10-16", "18:00", "ANNA NAGAR")[1] == "18:00"
-    with pytest.raises(ValueError, match="ANNA NAGAR start at 18:00, 19:00"):
-        slot("2026-10-16", "06:00", "ANNA NAGAR")
-    with pytest.raises(ValueError, match="trials at ECR"):
-        slot("2026-10-16", "18:00", "ECR")
 
 
 def test_past_slot_rejected():
@@ -86,28 +90,51 @@ def test_bad_formats_rejected(date, time):
         slot(date, time, "ECR")
 
 
-# ── Locations from the dashboard ──────────────────────────────────────────────
+# ── Timings ───────────────────────────────────────────────────────────────────
 
-def test_clean_location_normalises_input():
-    row = db.clean_location({"name": "  anna   nagar ", "days": ["4", 0, 0], "slot_times": "19:00, 6:00,19:00"})
-    assert row["name"] == "ANNA NAGAR"
-    assert row["days"] == "[0, 4]" and row["slot_times"] == '["06:00", "19:00"]'
-
-
-@pytest.mark.parametrize("body,msg", [
-    ({"days": [0], "slot_times": "06:00"}, "name"),
-    ({"name": "X", "days": [], "slot_times": "06:00"}, "day"),
-    ({"name": "X", "days": [0], "slot_times": ""}, "start time"),
-    ({"name": "X", "days": [0], "slot_times": "6am"}, "HH:MM"),
-])
-def test_clean_location_rejects_bad_input(body, msg):
-    with pytest.raises(ValueError, match=msg):
-        db.clean_location(body)
+def test_one_hour_starts_fit_inside_each_timing():
+    assert slots_for_weekday(STANDARD, 0) == ["06:00", "07:00", "08:00", "09:00", "16:30", "17:30", "18:30", "19:30"]
+    assert slots_for_weekday(STANDARD, 6) == []
+    # A 90-minute window fits only one one-hour session.
+    assert slots_for_weekday([{"days": [0], "start": "06:00", "end": "07:30"}], 0) == ["06:00"]
 
 
 def test_spoken_schedule():
-    assert describe_days([0, 1, 2, 3, 4, 5]) == "Monday to Saturday"
-    assert describe_hours(TIMES) == "6 AM–10 AM and 4:30 PM–8:30 PM"
+    assert describe_days(MON_SAT) == "Monday to Saturday"
+    assert describe_schedule(LOCS[2]["schedule"]) == "Monday to Friday 6 PM–8 PM; Saturday 7 AM–9 AM"
+
+
+def test_older_branches_convert_to_timings():
+    times = ["06:00", "07:00", "08:00", "09:00", "16:30", "17:30", "18:30", "19:30"]
+    assert schedule_from_slots(MON_SAT, times) == STANDARD
+    parsed = db._parse_location({"id": "x", "name": "ECR", "days": "[0,1,2,3,4,5]", "slot_times": str(times).replace("'", '"')})
+    assert parsed["schedule"] == STANDARD
+
+
+def test_clean_location_normalises_input():
+    row = db.clean_location({"name": "  anna   nagar ", "schedule": [
+        {"days": ["4", 0, 0], "start": "6:00", "end": "08:00"}, {"days": [5], "start": "07:00", "end": "09:00"}]})
+    assert row["name"] == "ANNA NAGAR"
+    assert row["schedule"] == ('[{"days": [0, 4], "start": "06:00", "end": "08:00"}, '
+                               '{"days": [5], "start": "07:00", "end": "09:00"}]')
+    assert row["days"] == "[0, 4, 5]"
+
+
+@pytest.mark.parametrize("schedule,msg", [
+    ([], "at least one timing"),
+    ([{"days": [], "start": "06:00", "end": "08:00"}], "pick at least one day"),
+    ([{"days": [0], "start": "", "end": "08:00"}], "start and end"),
+    ([{"days": [0], "start": "09:00", "end": "08:00"}], "after the start"),
+    ([{"days": [0], "start": "08:00", "end": "08:30"}], "at least 60 minutes"),
+])
+def test_clean_location_rejects_bad_timings(schedule, msg):
+    with pytest.raises(ValueError, match=msg):
+        db.clean_location({"name": "X", "schedule": schedule})
+
+
+def test_clean_location_needs_a_name():
+    with pytest.raises(ValueError, match="name"):
+        db.clean_location({"schedule": STANDARD})
 
 
 # ── Call scripts ──────────────────────────────────────────────────────────────
@@ -127,7 +154,8 @@ def test_trial_prompt_books_and_knows_the_date_and_phone():
     assert "record_missed_class_reason" not in p
     # Asks the branch first, and lists each branch's own timings.
     assert "Ask which branch suits them first (ADAYAR or ECR or ANNA NAGAR)" in p
-    assert "ANNA NAGAR — open Monday to Friday, 6 PM–8 PM" in p and "Address: 2nd Avenue" in p
+    assert "ANNA NAGAR — open Monday to Friday 6 PM–8 PM; Saturday 7 AM–9 AM." in p
+    assert "Trial start times on Saturday: 7 AM, 8 AM." in p and "Address: 2nd Avenue" in p
 
 
 def test_no_branches_means_no_booking_offer():

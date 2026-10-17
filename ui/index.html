@@ -206,6 +206,15 @@
   .day-picks { display: flex; gap: 8px; flex-wrap: wrap; }
   .day-picks label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 6px 12px; cursor: pointer; user-select: none; }
   .day-picks label:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-text); }
+  .timing-list { display: flex; flex-direction: column; gap: 10px; }
+  .timing-row { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+  .timing-row .day-picks { grid-column: 1 / -1; gap: 6px; }
+  .timing-row .day-picks label { padding: 4px 10px; font-size: 12.5px; }
+  .timing-hours { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .timing-hours input { width: auto; flex: 1; min-width: 0; }
+  .timing-hours span { color: var(--muted); font-size: 13px; }
+  .timing-lines { display: flex; flex-direction: column; gap: 4px; }
+  .timing-lines b { font-weight: 600; color: var(--text); }
   .facts-meta { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 14px; }
   .facts-meta dt { color: var(--muted); }
   .facts-meta dd { color: var(--text); }
@@ -674,7 +683,7 @@
   <div class="card">
     <div class="table-wrap">
       <table class="rtable">
-        <thead><tr><th>Branch</th><th>Open</th><th>Class hours</th><th>Trial start times</th><th></th></tr></thead>
+        <thead><tr><th>Branch</th><th>Timings</th><th></th></tr></thead>
         <tbody id="locations-body"></tbody>
       </table>
     </div>
@@ -1016,7 +1025,7 @@
       <div class="form-grid">
         <div class="form-group"><label for="appt-name">Name <span class="muted">*</span></label><input id="appt-name" autocomplete="name" /></div>
         <div class="form-group"><label for="appt-phone">Phone <span class="muted">*</span></label><input id="appt-phone" type="tel" inputmode="tel" placeholder="+91 98765 43210" /></div>
-        <div class="form-group"><label for="appt-date">Date <span class="muted">*</span></label><input id="appt-date" type="date" /></div>
+        <div class="form-group"><label for="appt-date">Date <span class="muted">*</span></label><input id="appt-date" type="date" onchange="onApptLocationChange()" /></div>
         <div class="form-group"><label for="appt-location">Branch <span class="muted">*</span></label>
           <select id="appt-location" onchange="onApptLocationChange()"></select>
         </div>
@@ -1099,7 +1108,7 @@
 <div class="modal-overlay" id="modal-location" role="dialog" aria-modal="true" aria-labelledby="loc-title">
   <div class="modal">
     <div class="modal-head">
-      <div><h2 id="loc-title">Add location</h2><div class="sub">Sessions are one hour. Trials can be booked at any start time below, on the days the branch is open.</div></div>
+      <div><h2 id="loc-title">Add location</h2><div class="sub">Set the hours for each day. Tara offers trials only inside these timings.</div></div>
       <button class="icon-btn modal-close" onclick="closeModal('modal-location')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body stack">
@@ -1107,21 +1116,10 @@
       <div class="form-group"><label for="loc-name">Branch name <span class="muted">*</span></label><input id="loc-name" maxlength="60" placeholder="e.g. ANNA NAGAR" /></div>
       <div class="form-group"><label for="loc-address">Address <span class="lbl-hint">— optional; Tara reads it out if asked</span></label><input id="loc-address" maxlength="200" placeholder="Street, area" /></div>
       <div class="form-group">
-        <label>Days open <span class="muted">*</span></label>
-        <div class="day-picks" id="loc-days">
-          <label><input type="checkbox" value="0" /> Mon</label>
-          <label><input type="checkbox" value="1" /> Tue</label>
-          <label><input type="checkbox" value="2" /> Wed</label>
-          <label><input type="checkbox" value="3" /> Thu</label>
-          <label><input type="checkbox" value="4" /> Fri</label>
-          <label><input type="checkbox" value="5" /> Sat</label>
-          <label><input type="checkbox" value="6" /> Sun</label>
-        </div>
-      </div>
-      <div class="form-group">
-        <label for="loc-times">Session start times <span class="muted">*</span></label>
-        <input id="loc-times" placeholder="06:00, 07:00, 08:00, 09:00, 16:30, 17:30" />
-        <span class="hint">24-hour times, separated by commas. Each session is one hour, so 06:00–09:00 starts means classes 6–10 AM.</span>
+        <label>Timings <span class="muted">*</span></label>
+        <div id="loc-timings" class="timing-list"></div>
+        <div><button type="button" class="btn btn-outline btn-sm" onclick="addTimingRow()"><svg class="ico"><use href="#i-plus"/></svg>Add timing</button></div>
+        <span class="hint">Add one row per set of days with the same hours — e.g. Mon–Fri 6:00 AM–10:00 AM, Mon–Fri 4:30 PM–8:30 PM, and Sat 7:00 AM–10:00 AM. Trials are one hour and start on the hour from each start time.</span>
       </div>
     </div>
     <div class="modal-footer">
@@ -1418,24 +1416,45 @@ function renderLocations(locs) {
   document.getElementById('locations-body').innerHTML = locs.map(l => `
     <tr>
       <td><strong>${esc(l.name)}</strong>${l.address ? `<div class="hint">${esc(l.address)}</div>` : ''}</td>
-      <td>${esc(l.days_text)}</td>
-      <td>${esc(l.hours_text)}</td>
-      <td class="muted">${esc(l.slot_times.join(', '))}</td>
+      <td><div class="timing-lines">${(l.timings || []).map(t =>
+        `<span><b>${esc(t.days)}</b> · ${esc(t.hours.join(', '))}</span>`).join('') || '<span class="muted">No timings</span>'}</div></td>
       <td><div class="row-actions">
         <button class="btn btn-outline btn-sm" onclick="openLocationModal(${jsArg(l.id)})">${icon('edit')}Edit</button>
         <button class="btn btn-ghost btn-icon danger" title="Delete" aria-label="Delete location" onclick="deleteLocation(${jsArg(l.id)})">${icon('trash')}</button>
       </div></td>
-    </tr>`).join('') || emptyRow(5, 'No locations yet', 'Add a branch so Tara can book trials there.', 'calendar');
+    </tr>`).join('') || emptyRow(3, 'No locations yet', 'Add a branch so Tara can book trials there.', 'calendar');
+}
+
+const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DEFAULT_TIMINGS = [
+  { days: [0, 1, 2, 3, 4, 5], start: '06:00', end: '10:00' },
+  { days: [0, 1, 2, 3, 4, 5], start: '16:30', end: '20:30' },
+];
+
+function addTimingRow(t = { days: [0, 1, 2, 3, 4], start: '', end: '' }) {
+  const row = document.createElement('div');
+  row.className = 'timing-row';
+  row.innerHTML = `
+    <div class="day-picks">${DAY_SHORT.map((d, i) =>
+      `<label><input type="checkbox" value="${i}" ${t.days.includes(i) ? 'checked' : ''} /> ${d}</label>`).join('')}</div>
+    <div class="timing-hours">
+      <input type="time" class="t-start" value="${esc(t.start)}" aria-label="Start time" />
+      <span>to</span>
+      <input type="time" class="t-end" value="${esc(t.end)}" aria-label="End time" />
+    </div>
+    <button type="button" class="btn btn-ghost btn-icon danger" aria-label="Remove timing" title="Remove timing">${icon('x', 'ico-sm')}</button>`;
+  row.querySelector('button').addEventListener('click', () => row.remove());
+  document.getElementById('loc-timings').appendChild(row);
 }
 
 function openLocationModal(id) {
-  const l = (id && locationsById[id]) || { name: '', address: '', days: [0, 1, 2, 3, 4, 5], slot_times: [] };
+  const l = (id && locationsById[id]) || { name: '', address: '', schedule: DEFAULT_TIMINGS };
   document.getElementById('loc-title').textContent = id ? 'Edit ' + l.name : 'Add location';
   document.getElementById('loc-id').value = id || '';
   document.getElementById('loc-name').value = l.name;
   document.getElementById('loc-address').value = l.address || '';
-  document.querySelectorAll('#loc-days input').forEach(c => { c.checked = l.days.includes(Number(c.value)); });
-  document.getElementById('loc-times').value = l.slot_times.join(', ');
+  document.getElementById('loc-timings').innerHTML = '';
+  (l.schedule && l.schedule.length ? l.schedule : DEFAULT_TIMINGS).forEach(t => addTimingRow(t));
   openModal('modal-location');
   setTimeout(() => document.getElementById('loc-name').focus(), 50);
 }
@@ -1445,8 +1464,11 @@ async function saveLocation() {
   const body = {
     name: document.getElementById('loc-name').value.trim(),
     address: document.getElementById('loc-address').value.trim(),
-    days: [...document.querySelectorAll('#loc-days input:checked')].map(c => Number(c.value)),
-    slot_times: document.getElementById('loc-times').value,
+    schedule: [...document.querySelectorAll('#loc-timings .timing-row')].map(row => ({
+      days: [...row.querySelectorAll('.day-picks input:checked')].map(c => Number(c.value)),
+      start: row.querySelector('.t-start').value,
+      end: row.querySelector('.t-end').value,
+    })),
   };
   await withBusy(document.getElementById('loc-save'), async () => {
     try {
@@ -1733,9 +1755,15 @@ async function openAddApptModal() {
 
 function onApptLocationChange() {
   const name = document.getElementById('appt-location').value;
+  const date = document.getElementById('appt-date').value;
   const loc = (BUSINESS.locations || []).find(l => l.name === name);
-  document.getElementById('appt-time').innerHTML = (loc ? loc.slot_times : [])
-    .map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  const sel = document.getElementById('appt-time');
+  if (!date) { sel.innerHTML = '<option value="">Pick a date first</option>'; return; }
+  const weekday = (new Date(date + 'T12:00:00').getDay() + 6) % 7;   // JS Sunday=0 → Monday=0
+  const times = loc ? (loc.slots_by_day || {})[weekday] || [] : [];
+  sel.innerHTML = times.length
+    ? times.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')
+    : '<option value="">Closed that day</option>';
 }
 
 async function createAppt() {

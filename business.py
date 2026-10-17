@@ -36,6 +36,48 @@ def _spoken_time(hhmm: str) -> str:
     return f"{h12}:{m:02d} {suffix}" if m else f"{h12} {suffix}"
 
 
+def _mins(hhmm: str) -> int:
+    return int(hhmm[:2]) * 60 + int(hhmm[3:5])
+
+
+def _hhmm(mins: int) -> str:
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+# ── Branch schedules ──────────────────────────────────────────────────────────
+# A branch's schedule is a list of timings, each {"days": [0..6], "start": "HH:MM",
+# "end": "HH:MM"} — e.g. Mon–Fri 06:00–10:00, Mon–Fri 16:30–20:30, Sat 07:00–10:00.
+# One-hour trials can start on the hour from `start` while they still end by `end`.
+
+def block_starts(start: str, end: str) -> list:
+    """'16:30','20:30' → ['16:30','17:30','18:30','19:30']."""
+    out, t = [], _mins(start)
+    while t + SESSION_MINUTES <= _mins(end):
+        out.append(_hhmm(t))
+        t += SESSION_MINUTES
+    return out
+
+
+def schedule_from_slots(days, slot_times) -> list:
+    """Convert the older format (one set of days + start times) into timings by merging
+    back-to-back one-hour sessions: 06:00..09:00 → 06:00–10:00."""
+    mins = sorted({_mins(t) for t in slot_times})
+    blocks, i = [], 0
+    while i < len(mins):
+        start = end = mins[i]
+        while i + 1 < len(mins) and mins[i + 1] == end + SESSION_MINUTES:
+            i += 1
+            end = mins[i]
+        blocks.append({"days": sorted(set(days)), "start": _hhmm(start), "end": _hhmm(end + SESSION_MINUTES)})
+        i += 1
+    return blocks
+
+
+def slots_for_weekday(schedule: list, weekday: int) -> list:
+    """Every trial start time on a given weekday (Mon=0), across all timings."""
+    return sorted({t for b in schedule if weekday in b["days"] for t in block_starts(b["start"], b["end"])})
+
+
 def describe_days(days) -> str:
     """[0,1,2,3,4,5] → 'Monday to Saturday'; [0,2,4] → 'Monday, Wednesday, Friday'."""
     days = sorted(set(int(d) for d in days))
@@ -46,32 +88,36 @@ def describe_days(days) -> str:
     return ", ".join(WEEKDAY_NAMES[d] for d in days)
 
 
-def describe_hours(slot_times) -> str:
-    """Merge back-to-back one-hour sessions into class hours:
-    ['06:00','07:00','16:30'] → '6 AM–8 AM and 4:30 PM–5:30 PM'."""
-    mins = sorted({int(t[:2]) * 60 + int(t[3:5]) for t in slot_times})
-    if not mins:
-        return "no timings set"
-    ranges, start, end = [], mins[0], mins[0] + SESSION_MINUTES
-    for m in mins[1:]:
-        if m <= end:
-            end = max(end, m + SESSION_MINUTES)
-        else:
-            ranges.append((start, end))
-            start, end = m, m + SESSION_MINUTES
-    ranges.append((start, end))
-    fmt = lambda m: _spoken_time(f"{m // 60:02d}:{m % 60:02d}")  # noqa: E731
-    return " and ".join(f"{fmt(a)}–{fmt(b)}" for a, b in ranges)
+def schedule_groups(schedule: list) -> list:
+    """Group timings that share the same days, in weekday order:
+    [("Monday to Friday", ["6 AM–10 AM", "4:30 PM–8:30 PM"]), ("Saturday", ["7 AM–10 AM"])]."""
+    groups: dict = {}
+    for b in sorted(schedule, key=lambda b: (min(b["days"]) if b["days"] else 9, b["start"])):
+        groups.setdefault(tuple(sorted(b["days"])), []).append(
+            f"{_spoken_time(b['start'])}–{_spoken_time(b['end'])}")
+    return [(describe_days(days), ranges) for days, ranges in groups.items()]
+
+
+def describe_schedule(schedule: list) -> str:
+    """'Monday to Friday 6 AM–10 AM and 4:30 PM–8:30 PM; Saturday 7 AM–10 AM'."""
+    return "; ".join(f"{days} {' and '.join(ranges)}" for days, ranges in schedule_groups(schedule)) or "no timings set"
 
 
 def describe_location(loc: dict) -> str:
-    """One line per branch, used in the call scripts."""
-    starts = ", ".join(_spoken_time(t) for t in loc["slot_times"]) or "none"
-    line = (f"• {loc['name']} — open {describe_days(loc['days'])}, {describe_hours(loc['slot_times'])}. "
-            f"Trial start times: {starts}.")
+    """One block per branch, used in the call scripts: hours, then the exact trial start
+    times for each group of days."""
+    schedule = loc.get("schedule") or []
+    lines = [f"• {loc['name']} — open {describe_schedule(schedule)}."]
+    groups: dict = {}
+    for wd in range(7):
+        starts = slots_for_weekday(schedule, wd)
+        if starts:
+            groups.setdefault(tuple(starts), []).append(wd)
+    for starts, days in groups.items():
+        lines.append(f"  Trial start times on {describe_days(days)}: {', '.join(_spoken_time(t) for t in starts)}.")
     if loc.get("address"):
-        line += f" Address: {loc['address']}."
-    return line
+        lines.append(f"  Address: {loc['address']}.")
+    return "\n".join(lines)
 
 
 # ── Facts the agent may state on any call ─────────────────────────────────────
