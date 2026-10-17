@@ -12,3 +12,6 @@ node_modules/
 dist/
 build/
 .DS_Store
+
+# Scratch copy of deploy environment variables — contains secrets
+check.txt
