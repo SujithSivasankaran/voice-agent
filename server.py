@@ -536,11 +536,26 @@ async def root():
 
 @app.get("/health")
 async def health():
-    from db import APP_TIMEZONE
+    from db import APP_TIMEZONE, _adb
+    # Which Supabase project this deploy talks to (the project id is public — it's in
+    # every Supabase URL), and whether the newest tables are there. No secrets.
+    url = os.environ.get("SUPABASE_URL", "")
+    database = {
+        "project": url.split("//", 1)[-1].split(".", 1)[0] if url else None,
+        "migrations_configured": bool(os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")),
+    }
+    for table in ("users", "locations"):
+        try:
+            db = await _adb()
+            await db.table(table).select("id").limit(1).execute()
+            database[f"{table}_table"] = "ok"
+        except Exception:
+            database[f"{table}_table"] = "missing or unreachable"
     return {
         "status": "ok",
         "timestamp": now_local().isoformat(),
         "timezone": APP_TIMEZONE,
+        "database": database,
         "langfuse": langfuse_status(),
         "recordings": recording_sync_status(),
     }
