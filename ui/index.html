@@ -373,6 +373,17 @@
   .camp-title { font-weight: 600; font-size: 15px; color: var(--text); word-break: break-word; }
   .camp-brand { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .camp-body { padding: 14px 20px 16px; flex: 1; }
+  .camp-tabs { margin-bottom: 16px; }
+  .stack-cell { display: inline-flex; flex-direction: column; align-items: inherit; gap: 1px; }
+  .sheet { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .sheet-head, .sheet-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 8px; align-items: center; padding: 6px 8px; }
+  .sheet.with-date .sheet-head, .sheet.with-date .sheet-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 130px) 36px; }
+  .sheet-head { background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 500; color: var(--muted); }
+  .sheet-rows { max-height: 360px; overflow-y: auto; }
+  .sheet-row + .sheet-row { border-top: 1px solid var(--border); }
+  .sheet-row input { min-height: 36px; padding: 6px 10px; box-shadow: none; }
+  .sheet-row input.bad { border-color: var(--danger); }
+  .sheet-row .btn-icon { min-height: 32px; width: 32px; }
   .spinner { width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -470,6 +481,15 @@
     .log-entry { grid-template-columns: 1fr; gap: 2px; padding: 8px 16px; }
     .log-entry .det { grid-column: 1; }
 
+    /* On-screen call list → one card per person */
+    .sheet-head { display: none; }
+    .sheet-row, .sheet.with-date .sheet-row { grid-template-columns: minmax(0, 1fr) 36px; padding: 10px; }
+    .sheet-row input:nth-child(2), .sheet-row input:nth-child(3) { grid-column: 1; }
+    .sheet-row .btn-icon { grid-column: 2; grid-row: 1; }
+    .camp-top { padding: 16px 16px 0; flex-wrap: wrap; }
+    .camp-body { padding: 12px 16px 16px; }
+    .camp-tabs button { padding: 7px 8px; font-size: 13px; }
+
     /* Tables → stacked cards */
     .rtable thead { display: none; }
     .rtable, .rtable tbody, .rtable tr, .rtable td { display: block; width: 100%; }
@@ -484,7 +504,9 @@
     .rtable td:first-child { font-size: 15px; justify-content: flex-start; text-align: left; padding-bottom: 6px !important; }
     .rtable td:first-child::before { display: none; }
     .rtable td.is-empty { display: none; }
-    .rtable td .row-actions { justify-content: flex-end; }
+    .rtable td .row-actions { justify-content: flex-end; margin-left: auto; }
+    .sheet-rows { max-height: none; }
+    .rtable td .stack-cell { align-items: flex-end; }
     .rtable td input.inline-note { width: 60%; }
 
     /* Modals → bottom sheets */
@@ -575,7 +597,7 @@
   <div class="nav-scroll">
     <div class="nav-label">Overview</div>
     <ul>
-      <li><a href="#dashboard" class="nav-link active" data-page="dashboard" data-tip="Dashboard"><svg class="ico"><use href="#i-grid"/></svg><span class="txt">Dashboard</span></a></li>
+      <li><a href="#dashboard" class="nav-link active" data-page="dashboard" data-tip="Overview"><svg class="ico"><use href="#i-grid"/></svg><span class="txt">Overview</span></a></li>
       <li><a href="#campaigns" class="nav-link" data-page="campaigns" data-tip="Campaigns"><svg class="ico"><use href="#i-megaphone"/></svg><span class="txt">Campaigns</span></a></li>
     </ul>
     <div class="nav-label">Records</div>
@@ -606,7 +628,7 @@
 <!-- Mobile top bar -->
 <header class="mobile-bar">
   <button class="icon-btn" onclick="openNav()" aria-label="Open menu"><svg class="ico"><use href="#i-menu"/></svg></button>
-  <div class="title" id="mobile-title">Dashboard</div>
+  <div class="title" id="mobile-title">Overview</div>
   <button class="icon-btn" onclick="go('campaigns')" aria-label="Campaigns"><svg class="ico"><use href="#i-phone-out"/></svg></button>
 </header>
 
@@ -616,8 +638,8 @@
 <section class="page active" id="page-dashboard">
   <div class="page-head">
     <div>
-      <h1>Dashboard</h1>
-      <p class="subtitle">How your AI agent is performing</p>
+      <h1>Overview</h1>
+      <p class="subtitle">Key numbers, your branches, and what Tara knows about Harry's Fitcamp</p>
     </div>
     <div class="head-actions">
       <button class="btn btn-outline" onclick="exportRecentCalls()"><svg class="ico"><use href="#i-download"/></svg>Export</button>
@@ -685,12 +707,12 @@
   <div class="page-head">
     <div>
       <h1>Campaigns</h1>
-      <p class="subtitle">Call one person, or upload a list and Tara calls everyone on it</p>
+      <p class="subtitle">Call one person, type in several, or upload a CSV / Excel list — Tara calls everyone on it</p>
     </div>
   </div>
 
   <div class="camp-grid">
-    <div class="card camp-card">
+    <div class="card camp-card" data-campaign="trial">
       <div class="camp-top">
         <div style="min-width:0">
           <div class="camp-title">Trial booking</div>
@@ -699,27 +721,50 @@
         <button class="btn btn-outline btn-sm" onclick="viewPrompt('trial')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
       </div>
       <div class="camp-body">
-        <div class="form-grid">
-          <div class="form-group"><label for="tr-phone">Phone number <span class="muted">*</span></label><input id="tr-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+91 98765 43210" /></div>
-          <div class="form-group"><label for="tr-name">Name</label><input id="tr-name" autocomplete="name" placeholder="Rahul Sharma" /></div>
+        <div class="tabs camp-tabs" role="tablist">
+          <button class="active" data-panel="one" role="tab">One person</button>
+          <button data-panel="many" role="tab">Several people</button>
+          <button data-panel="file" role="tab">Upload file</button>
         </div>
-        <div class="btn-row" style="margin-top:14px">
-          <button class="btn btn-primary" id="tr-call" onclick="callOne('trial')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+
+        <div class="tab-panel active" data-panel="one">
+          <div class="form-grid">
+            <div class="form-group"><label for="tr-phone">Phone number <span class="muted">*</span></label><input id="tr-phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+91 98765 43210" /></div>
+            <div class="form-group"><label for="tr-name">Name</label><input id="tr-name" autocomplete="off" placeholder="Rahul Sharma" /></div>
+          </div>
+          <div class="btn-row" style="margin-top:14px">
+            <button class="btn btn-primary" id="tr-call" onclick="callOne('trial')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+          </div>
         </div>
-        <div class="section-label" style="margin:22px 0 10px">Or upload a call list</div>
-        <div class="drop-zone list-drop" data-campaign="trial" role="button" tabindex="0">
-          <div class="dz-title"><span>Choose a CSV</span> or drag it here</div>
-          <div class="hint" style="margin-top:4px">Columns: <code class="mono">phone</code>, <code class="mono">name</code></div>
-          <input type="file" id="tr-file" accept=".csv" style="display:none" onchange="onListFile('trial', this.files[0])" />
+
+        <div class="tab-panel" data-panel="many">
+          <div class="sheet" id="tr-sheet">
+            <div class="sheet-head"><span>Name</span><span>Phone <span class="muted">*</span></span><span></span></div>
+            <div class="sheet-rows" id="tr-rows"></div>
+          </div>
+          <div class="hint" style="margin-top:8px">Tip: copy rows from Excel or Google Sheets and paste into any box — they fill the table. Include the country code, e.g. +91.</div>
+          <div class="btn-row" style="margin-top:12px">
+            <button class="btn btn-outline" onclick="addSheetRow('trial')"><svg class="ico"><use href="#i-plus"/></svg>Add row</button>
+            <button class="btn btn-primary" id="tr-start" onclick="startSheet('trial')"><svg class="ico"><use href="#i-play"/></svg><span id="tr-start-label">Start calling</span></button>
+          </div>
         </div>
-        <div class="file-pill" id="tr-file-name"></div>
-        <div class="btn-row" style="margin-top:14px">
-          <button class="btn btn-outline" id="tr-upload" onclick="uploadList('trial')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+
+        <div class="tab-panel" data-panel="file">
+          <div class="drop-zone list-drop" data-campaign="trial" role="button" tabindex="0">
+            <div class="dz-title"><span>Choose a CSV or Excel file</span> or drag it here</div>
+            <div class="hint" style="margin-top:4px">Columns: <code class="mono">name</code>, <code class="mono">phone</code></div>
+            <input type="file" id="tr-file" accept=".csv,.xlsx" style="display:none" onchange="onListFile('trial', this.files[0])" />
+          </div>
+          <div class="file-pill" id="tr-file-name"></div>
+          <div class="btn-row" style="margin-top:14px">
+            <a class="btn btn-ghost" href="/campaigns/template/trial" download><svg class="ico"><use href="#i-download"/></svg>Download template</a>
+            <button class="btn btn-primary" id="tr-upload" onclick="uploadList('trial')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="card camp-card">
+    <div class="card camp-card" data-campaign="missed_class">
       <div class="camp-top">
         <div style="min-width:0">
           <div class="camp-title">Missed class</div>
@@ -728,23 +773,46 @@
         <button class="btn btn-outline btn-sm" onclick="viewPrompt('missed_class')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
       </div>
       <div class="camp-body">
-        <div class="form-grid three">
-          <div class="form-group"><label for="mc-phone">Phone number <span class="muted">*</span></label><input id="mc-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+91 98765 43210" /></div>
-          <div class="form-group"><label for="mc-name">Member name</label><input id="mc-name" autocomplete="name" placeholder="Priya" /></div>
-          <div class="form-group"><label for="mc-missed">Missed class on</label><input id="mc-missed" type="date" /></div>
+        <div class="tabs camp-tabs" role="tablist">
+          <button class="active" data-panel="one" role="tab">One person</button>
+          <button data-panel="many" role="tab">Several people</button>
+          <button data-panel="file" role="tab">Upload file</button>
         </div>
-        <div class="btn-row" style="margin-top:14px">
-          <button class="btn btn-primary" id="mc-call" onclick="callOne('missed_class')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+
+        <div class="tab-panel active" data-panel="one">
+          <div class="form-grid three">
+            <div class="form-group"><label for="mc-phone">Phone number <span class="muted">*</span></label><input id="mc-phone" type="tel" inputmode="tel" autocomplete="off" placeholder="+91 98765 43210" /></div>
+            <div class="form-group"><label for="mc-name">Member name</label><input id="mc-name" autocomplete="off" placeholder="Priya" /></div>
+            <div class="form-group"><label for="mc-missed">Missed class on</label><input id="mc-missed" type="date" /></div>
+          </div>
+          <div class="btn-row" style="margin-top:14px">
+            <button class="btn btn-primary" id="mc-call" onclick="callOne('missed_class')"><svg class="ico"><use href="#i-phone-out"/></svg>Call now</button>
+          </div>
         </div>
-        <div class="section-label" style="margin:22px 0 10px">Or upload a call list</div>
-        <div class="drop-zone list-drop" data-campaign="missed_class" role="button" tabindex="0">
-          <div class="dz-title"><span>Choose a CSV</span> or drag it here</div>
-          <div class="hint" style="margin-top:4px">Columns: <code class="mono">phone</code>, <code class="mono">name</code>, optional <code class="mono">missed_date</code></div>
-          <input type="file" id="mc-file" accept=".csv" style="display:none" onchange="onListFile('missed_class', this.files[0])" />
+
+        <div class="tab-panel" data-panel="many">
+          <div class="sheet with-date" id="mc-sheet">
+            <div class="sheet-head"><span>Member name</span><span>Phone <span class="muted">*</span></span><span>Missed on</span><span></span></div>
+            <div class="sheet-rows" id="mc-rows"></div>
+          </div>
+          <div class="hint" style="margin-top:8px">Tip: copy rows from Excel or Google Sheets and paste into any box — they fill the table. Include the country code, e.g. +91.</div>
+          <div class="btn-row" style="margin-top:12px">
+            <button class="btn btn-outline" onclick="addSheetRow('missed_class')"><svg class="ico"><use href="#i-plus"/></svg>Add row</button>
+            <button class="btn btn-primary" id="mc-start" onclick="startSheet('missed_class')"><svg class="ico"><use href="#i-play"/></svg><span id="mc-start-label">Start calling</span></button>
+          </div>
         </div>
-        <div class="file-pill" id="mc-file-name"></div>
-        <div class="btn-row" style="margin-top:14px">
-          <button class="btn btn-outline" id="mc-upload" onclick="uploadList('missed_class')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+
+        <div class="tab-panel" data-panel="file">
+          <div class="drop-zone list-drop" data-campaign="missed_class" role="button" tabindex="0">
+            <div class="dz-title"><span>Choose a CSV or Excel file</span> or drag it here</div>
+            <div class="hint" style="margin-top:4px">Columns: <code class="mono">name</code>, <code class="mono">phone</code>, <code class="mono">missed_date</code> (optional, YYYY-MM-DD)</div>
+            <input type="file" id="mc-file" accept=".csv,.xlsx" style="display:none" onchange="onListFile('missed_class', this.files[0])" />
+          </div>
+          <div class="file-pill" id="mc-file-name"></div>
+          <div class="btn-row" style="margin-top:14px">
+            <a class="btn btn-ghost" href="/campaigns/template/missed_class" download><svg class="ico"><use href="#i-download"/></svg>Download template</a>
+            <button class="btn btn-primary" id="mc-upload" onclick="uploadList('missed_class')"><svg class="ico"><use href="#i-play"/></svg>Start calling the list</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1248,7 +1316,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // ── Navigation ────────────────────────────────────────────────────────────────
 const PAGE_TITLES = {
   'users': 'Users',
-  'dashboard': 'Dashboard', 'campaigns': 'Campaigns', 'appointments': 'Trial bookings',
+  'dashboard': 'Overview', 'campaigns': 'Campaigns', 'appointments': 'Trial bookings',
   'missed': 'Missed classes', 'call-logs': 'Call logs', 'crm': 'Contacts',
   'settings': 'Settings', 'live-logs': 'Live logs',
 };
@@ -1261,7 +1329,7 @@ function go(page, push = true) {
   document.querySelectorAll('nav a[data-page]').forEach(x => x.classList.toggle('active', x.dataset.page === page));
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-' + page));
   document.getElementById('mobile-title').textContent = PAGE_TITLES[page] || '';
-  document.title = (PAGE_TITLES[page] || 'Dashboard') + " · Harry's Fitcamp";
+  document.title = (PAGE_TITLES[page] || 'Overview') + " · Harry's Fitcamp";
   if (push && location.hash !== '#' + page) history.pushState(null, '', '#' + page);
   document.querySelectorAll('.modal-overlay.open').forEach(m => closeModal(m.id));
   closeNav();
@@ -1397,6 +1465,36 @@ async function deleteLocation(id) {
   catch(e) { toast(e.message, false); }
 }
 
+async function loadRecentCalls() {
+  try {
+    const calls = await api('/calls?limit=8');
+    const tbody = document.querySelector('#tbl-recent tbody');
+    tbody.innerHTML = calls.slice(0,8).map(c => `
+      <tr>
+        <td><strong>${esc(c.lead_name || '—')}</strong></td>
+        <td class="nowrap">${esc(c.phone_number)}</td>
+        <td>${badge(c.outcome, prettyOutcome(c.outcome))}</td>
+        <td class="num">${fmtDur(c.duration_seconds)}</td>
+        <td class="muted nowrap">${fmtTime(c.timestamp)}</td>
+      </tr>`).join('') || emptyRow(5, 'No calls yet', 'Place your first call from Campaigns.', 'phone');
+  } catch(e) {}
+}
+
+async function exportRecentCalls() {
+  try {
+    const calls = await api('/calls?limit=200');
+    if (!calls.length) { toast('No calls to export', false); return; }
+    const head = ['Time','Name','Phone','Outcome','Duration (s)'];
+    const rows = calls.map(c => [fmtTime(c.timestamp), c.lead_name||'', c.phone_number||'', c.outcome||'', c.duration_seconds||0]);
+    const csv = [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = `fitcamp-calls-${istDateStamp()}.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+    toast(`Exported ${calls.length} calls`);
+  } catch(e) { toast('Export failed: ' + e.message, false); }
+}
+
 // ── Campaigns: call one person, or upload a call list ───────────────────────
 const CAMPAIGN_PREFIX = { trial: 'tr', missed_class: 'mc' };
 const listFiles = {};
@@ -1446,6 +1544,97 @@ async function uploadList(campaign) {
   });
 }
 
+// Tabs inside each campaign card.
+document.querySelectorAll('.camp-card').forEach(c => {
+  c.querySelectorAll('.camp-tabs button').forEach(btn => btn.addEventListener('click', () => {
+    c.querySelectorAll('.camp-tabs button').forEach(b => b.classList.toggle('active', b === btn));
+    c.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === btn.dataset.panel));
+  }));
+});
+
+// ── On-screen call list ("Several people") ───────────────────────────────────
+const SHEET_FIELDS = { trial: ['name', 'phone'], missed_class: ['name', 'phone', 'missed_date'] };
+const SHEET_PLACEHOLDERS = { name: 'Name', phone: '+91 98765 43210', missed_date: 'YYYY-MM-DD' };
+
+function sheetRowsEl(campaign) { return document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-rows`); }
+
+function addSheetRow(campaign, values = {}, focus = true) {
+  const row = document.createElement('div');
+  row.className = 'sheet-row';
+  row.innerHTML = SHEET_FIELDS[campaign].map(f =>
+    `<input data-field="${f}" ${f === 'phone' ? 'type="tel" inputmode="tel"' : ''} placeholder="${SHEET_PLACEHOLDERS[f]}" autocomplete="off" aria-label="${f.replace('_', ' ')}" value="${esc(values[f] || '')}" />`
+  ).join('') + `<button type="button" class="btn btn-ghost btn-icon danger" aria-label="Remove row" title="Remove row">${icon('x', 'ico-sm')}</button>`;
+  row.querySelector('button').addEventListener('click', () => { row.remove(); if (!sheetRowsEl(campaign).children.length) addSheetRow(campaign, {}, false); updateSheetCount(campaign); });
+  row.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => { inp.classList.remove('bad'); updateSheetCount(campaign); });
+    inp.addEventListener('paste', e => onSheetPaste(e, campaign, row, inp.dataset.field));
+    inp.addEventListener('keydown', e => {
+      // Enter on the last row adds a new one, like a spreadsheet.
+      if (e.key === 'Enter') { e.preventDefault(); const next = row.nextElementSibling || addSheetRow(campaign);
+        next.querySelector(`[data-field="${inp.dataset.field}"]`).focus(); }
+    });
+  });
+  sheetRowsEl(campaign).appendChild(row);
+  if (focus && Object.keys(values).length === 0) row.querySelector('input').focus();
+  updateSheetCount(campaign);
+  return row;
+}
+
+function onSheetPaste(e, campaign, row, field) {
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if (!/[\t\n]/.test(text.trim())) return;   // a single value: let the browser paste it
+  e.preventDefault();
+  const fields = SHEET_FIELDS[campaign];
+  let lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (/phone|mobile|number/i.test(lines[0] || '')) lines = lines.slice(1);   // skip a header row
+  let target = row, start = fields.indexOf(field);
+  lines.forEach((line, i) => {
+    if (i > 0) target = target.nextElementSibling || addSheetRow(campaign, {}, false);
+    line.split('\t').forEach((val, j) => {
+      const f = fields[start + j];
+      if (f) target.querySelector(`[data-field="${f}"]`).value = val.trim();
+    });
+  });
+  updateSheetCount(campaign);
+}
+
+function readSheet(campaign) {
+  const people = [], bad = [];
+  sheetRowsEl(campaign).querySelectorAll('.sheet-row').forEach(row => {
+    const person = {};
+    row.querySelectorAll('input').forEach(inp => { person[inp.dataset.field] = inp.value.trim(); });
+    if (!Object.values(person).some(Boolean)) return;            // empty row
+    if (!person.phone) { bad.push(row.querySelector('[data-field="phone"]')); return; }
+    people.push(person);
+  });
+  return { people, bad };
+}
+
+function updateSheetCount(campaign) {
+  const n = readSheet(campaign).people.length;
+  document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-start-label`).textContent =
+    n ? `Start calling ${n} ${n === 1 ? 'person' : 'people'}` : 'Start calling';
+}
+
+async function startSheet(campaign) {
+  const { people, bad } = readSheet(campaign);
+  bad.forEach(inp => inp.classList.add('bad'));
+  if (bad.length) { toast(`${bad.length} row${bad.length === 1 ? ' has' : 's have'} no phone number`, false); bad[0].focus(); return; }
+  if (!people.length) { toast('Add at least one person', false); return; }
+  if (!confirm(`Start calling ${people.length} ${people.length === 1 ? 'person' : 'people'} now?`)) return;
+  await withBusy(document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-start`), async () => {
+    try {
+      const r = await api('/campaigns/list', { method: 'POST', body: JSON.stringify({ campaign, contacts: people }) });
+      toast(`Calling ${r.contacts_loaded} ${r.contacts_loaded === 1 ? 'person' : 'people'}`);
+      sheetRowsEl(campaign).innerHTML = '';
+      for (let i = 0; i < 3; i++) addSheetRow(campaign, {}, false);
+      loadRuns();
+    } catch(e) { toast('Could not start: ' + e.message, false); }
+  });
+}
+
+Object.keys(SHEET_FIELDS).forEach(c => { for (let i = 0; i < 3; i++) addSheetRow(c, {}, false); });
+
 document.querySelectorAll('.list-drop').forEach(dz => {
   const campaign = dz.dataset.campaign;
   const input = document.getElementById(`${CAMPAIGN_PREFIX[campaign]}-file`);
@@ -1491,7 +1680,7 @@ async function loadRuns() {
       return `<tr>
         <td><strong>${esc(r.name)}</strong></td>
         <td>${campaignBadge(r.kind)}</td>
-        <td class="nowrap">${handled} of ${r.total || 0} called${extra ? `<div class="hint">${esc(extra)}</div>` : ''}</td>
+        <td><span class="stack-cell"><span class="nowrap">${handled} of ${r.total || 0} called</span>${extra ? `<span class="hint">${esc(extra)}</span>` : ''}</span></td>
         <td>${status}</td>
         <td class="muted nowrap">${fmtTime(r.created_at)}</td>
         <td><div class="row-actions">${action}
@@ -1534,7 +1723,7 @@ async function loadAppointments() {
 
 async function openAddApptModal() {
   try { BUSINESS = await api('/business'); } catch(e) { toast(e.message, false); return; }
-  if (!BUSINESS.locations.length) { toast('Add a location on the Dashboard first', false); return; }
+  if (!BUSINESS.locations.length) { toast('Add a location on the Overview page first', false); return; }
   ['appt-name', 'appt-phone', 'appt-date'].forEach(id => { document.getElementById(id).value = ''; });
   document.getElementById('appt-location').innerHTML =
     BUSINESS.locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('');

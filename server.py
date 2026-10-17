@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import re
 import io
 import json
 import logging
@@ -12,7 +13,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 # load_dotenv(override=False) is a local-dev convenience only.
 # On the VPS, Coolify injects env vars before process start, so this is a no-op.
@@ -556,7 +557,8 @@ def _with_descriptions(locations: list) -> list:
 async def business_info():
     """The business setup: fixed facts from business.py plus the branches from the database."""
     return {
-        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME, "voice": DEFAULT_VOICE, "facts": FACTS,
+        "name": BUSINESS_NAME, "assistant": ASSISTANT_NAME, "voice": DEFAULT_VOICE,
+        "facts": re.sub(r"\n\s+", " ", FACTS),  # join the hard-wrapped lines of each bullet
         "locations": _with_descriptions(await get_locations()),
         "campaigns": [{"key": k, **v} for k, v in CAMPAIGNS.items()],
         "missed_reasons": MISSED_REASONS,
@@ -630,22 +632,63 @@ async def call_single(request: Request):
 
 # ── Call lists (one uploaded CSV = one run of a campaign) ─────────────────────
 
-def _parse_call_list(text: str) -> list:
-    """Read a CSV of people to call. Needs a phone column; name and missed_date
-    (the class they missed) are optional. Header names are case-insensitive."""
-    reader = csv.DictReader(io.StringIO(text))
+# Column names a call list may use (CSV, Excel, or the on-screen table), lower-case.
+_PHONE_COLS = ("phone", "phone_number", "phone number", "mobile", "number")
+_NAME_COLS = ("name", "lead_name", "member name", "member_name")
+_DATE_COLS = ("missed_date", "missed date", "missed on", "date")
+MAX_LIST_SIZE = 2000
+
+
+def _cell_text(value) -> str:
+    """Excel cells arrive as numbers/dates; turn them into the text a person typed."""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))   # 919876543210.0 → "919876543210"
+    return str(value).strip()
+
+
+def _rows_to_contacts(rows) -> list:
+    """Turn {column: value} rows into contacts. Needs a phone column; name and
+    missed_date (the class they missed) are optional. Column names are case-insensitive."""
     contacts = []
-    for raw in reader:
-        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
-        phone = row.get("phone") or row.get("phone_number") or row.get("mobile") or ""
+    for raw in rows:
+        row = {str(k or "").strip().lower(): _cell_text(v) for k, v in raw.items()}
+        pick = lambda cols: next((row[c] for c in cols if row.get(c)), "")  # noqa: E731
+        phone = pick(_PHONE_COLS)
         if not phone:
             continue
-        contacts.append({
-            "phone": phone,
-            "name": row.get("name") or row.get("lead_name") or "there",
-            "missed_date": row.get("missed_date") or row.get("date") or "",
-        })
+        contacts.append({"phone": phone, "name": pick(_NAME_COLS) or "there", "missed_date": pick(_DATE_COLS)})
     return contacts
+
+
+def _parse_call_list(text: str) -> list:
+    """Read a CSV call list."""
+    return _rows_to_contacts(csv.DictReader(io.StringIO(text)))
+
+
+def _parse_xlsx(data: bytes) -> list:
+    """Read the first sheet of an Excel (.xlsx) call list; row 1 is the header."""
+    from openpyxl import load_workbook
+    sheet = load_workbook(io.BytesIO(data), read_only=True, data_only=True).worksheets[0]
+    rows = sheet.iter_rows(values_only=True)
+    header = [str(h or "").strip() for h in next(rows, [])]
+    return _rows_to_contacts(dict(zip(header, r)) for r in rows)
+
+
+async def _start_call_list(campaign: str, contacts: list, source: str, delay: int = 3) -> dict:
+    if not contacts:
+        raise HTTPException(400, "No rows with a phone number")
+    if len(contacts) > MAX_LIST_SIZE:
+        raise HTTPException(400, f"A call list can have at most {MAX_LIST_SIZE} people")
+    campaign = campaign_or_default(campaign)
+    name = f"{CAMPAIGNS[campaign]['label']} — {source} ({now_local().strftime('%d %b %H:%M')})"
+    run_id = await create_call_run(name, campaign, max(0, int(delay)))
+    loaded = await create_campaign_contacts(run_id, contacts)
+    _start_run(run_id)
+    return {"id": run_id, "contacts_loaded": loaded, "status": "running"}
 
 
 @app.post("/campaigns/upload")
@@ -654,16 +697,45 @@ async def upload_call_list(
     campaign: str = Form(TRIAL),
     call_delay_seconds: int = Form(3),
 ):
-    contacts = _parse_call_list((await file.read()).decode("utf-8-sig"))
+    data = await file.read()
+    filename = (file.filename or "call list").strip()
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        try:
+            contacts = _parse_xlsx(data)
+        except Exception as exc:
+            raise HTTPException(400, "Could not read that Excel file — save it as .xlsx or .csv and try again") from exc
+    elif lower.endswith(".xls"):
+        raise HTTPException(400, "Old .xls files aren't supported — in Excel, use Save As → .xlsx or .csv")
+    else:
+        contacts = _parse_call_list(data.decode("utf-8-sig", errors="replace"))
     if not contacts:
-        raise HTTPException(400, "The CSV has no rows with a phone number")
+        raise HTTPException(400, "The file has no rows with a phone number — check the column is called 'phone'")
+    return await _start_call_list(campaign, contacts, filename, call_delay_seconds)
+
+
+@app.post("/campaigns/list")
+async def start_typed_list(request: Request):
+    """Start a call list from the on-screen table: {campaign, contacts: [{name, phone, missed_date}]}."""
+    body = await request.json()
+    rows = body.get("contacts") or []
+    if not isinstance(rows, list):
+        raise HTTPException(400, "contacts must be a list")
+    contacts = _rows_to_contacts(r for r in rows if isinstance(r, dict))
+    return await _start_call_list(body.get("campaign"), contacts, f"{len(contacts)} added by hand",
+                                  int(body.get("call_delay_seconds") or 3))
+
+
+@app.get("/campaigns/template/{campaign}")
+async def call_list_template(campaign: str):
+    """A CSV with the right columns, to fill in with Excel or Google Sheets."""
     campaign = campaign_or_default(campaign)
-    label = CAMPAIGNS[campaign]["label"]
-    name = f"{label} — {file.filename or 'call list'} ({now_local().strftime('%d %b %H:%M')})"
-    run_id = await create_call_run(name, campaign, max(0, int(call_delay_seconds)))
-    loaded = await create_campaign_contacts(run_id, contacts)
-    _start_run(run_id)
-    return {"id": run_id, "contacts_loaded": loaded, "status": "running"}
+    if campaign == MISSED_CLASS:
+        body = "name,phone,missed_date\nPriya,+919876543210,2026-10-16\n"
+    else:
+        body = "name,phone\nRahul,+919876543210\n"
+    return Response(content=body, media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="{campaign}-call-list.csv"'})
 
 
 @app.get("/campaigns")

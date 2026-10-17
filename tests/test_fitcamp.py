@@ -196,3 +196,25 @@ def test_trial_prompt_follows_the_talk_track_and_adapts():
                   "Saturday", "answer it first", "IF THE CALLER ASKS"):
         assert point in p, point
     assert "up to seven" not in p
+
+
+def test_call_list_from_excel_and_table():
+    server = pytest.importorskip("server")
+    openpyxl = pytest.importorskip("openpyxl")
+    import io
+    from datetime import datetime as dt
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Name", "Phone", "Missed Date"])
+    ws.append(["Priya", 919876543210, dt(2026, 10, 14)])   # Excel stores numbers and dates natively
+    ws.append(["No phone", None, None])
+    ws.append(["Ravi", "+91 98765 00000", None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert server._parse_xlsx(buf.getvalue()) == [
+        {"phone": "919876543210", "name": "Priya", "missed_date": "2026-10-14"},
+        {"phone": "+91 98765 00000", "name": "Ravi", "missed_date": ""},
+    ]
+    # The on-screen table sends the same columns.
+    assert server._rows_to_contacts([{"name": "A", "phone": "+911", "missed_date": ""}, {"name": "B", "phone": ""}]) == [
+        {"phone": "+911", "name": "A", "missed_date": ""}]
