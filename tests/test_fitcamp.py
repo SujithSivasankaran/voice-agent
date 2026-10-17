@@ -173,7 +173,7 @@ def test_missed_class_prompt_asks_why_and_does_not_sell():
 
 
 def test_missed_class_prompt_without_date():
-    assert "missed their class recently" in prompts.build_prompt(MISSED_CLASS, "Priya", now=NOW)
+    assert "class recently" in prompts.build_prompt(MISSED_CLASS, "Priya", now=NOW)
 
 
 def test_placeholder_name_is_not_spoken():

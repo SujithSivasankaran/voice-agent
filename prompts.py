@@ -1,16 +1,18 @@
-# prompts.py — the fixed call scripts for Harry's Fitcamp.
+# prompts.py — the call scripts for Harry's Fitcamp.
 #
 # Three scripts: the trial-booking campaign, the missed-class campaign, and incoming
-# calls. Each is assembled from the script itself plus shared blocks (facts, voice
-# delivery, call ending, what never to disclose). Business facts and the booking
-# schedule live in business.py.
+# calls. The two campaign scripts are editable from the dashboard (DEFAULT_SCRIPTS
+# are the starting point); each is assembled with fixed blocks (booking steps,
+# reason recording, branches, facts, voice delivery, call ending, what never to
+# disclose) that keep the call working whatever the edit. Business facts live in
+# business.py; branches and timings in the database.
 
 from datetime import datetime
 from typing import Optional
 
 from business import (
     ASSISTANT_NAME, BUSINESS_NAME, FACTS, MISSED_REASONS, describe_location,
-    MISSED_CLASS, campaign_or_default,
+    MISSED_CLASS, TRIAL, campaign_or_default,
 )
 
 DELIVERY_RULES = """\
@@ -93,13 +95,24 @@ def _clean_name(lead_name: str) -> str:
     return name if name and name.lower() != "there" else ""
 
 
-# ── Campaign 1: trial booking ─────────────────────────────────────────────────
+# ── Editable campaign scripts ─────────────────────────────────────────────────
+# The conversation for each campaign is a template an admin can edit from the
+# dashboard (stored in the settings table; see db.get_campaign_script). These tokens
+# are filled in per call. Everything that makes the call *work* — booking steps,
+# recording the missed-class reason, branches, facts, ending rules — is added
+# automatically around the script, so an edit can't switch it off.
 
-def build_trial_prompt(lead_name: str = "", caller_phone: str = "", now: Optional[datetime] = None,
-                       locations: list = ()) -> str:
-    name = _clean_name(lead_name) or "the person"
-    script = f"""\
-You are {ASSISTANT_NAME}, calling on behalf of {BUSINESS_NAME} in Chennai. You are calling {name}, who showed
+SCRIPT_TOKENS = {
+    "{name}": "the person's name (or 'the person' if unknown)",
+    "{missed_when}": "'on 2026-10-14' when the call list gave a date, else 'recently'",
+    "{today}": "today's day and date, e.g. 'Saturday, 2026-10-17'",
+    "{assistant}": ASSISTANT_NAME,
+    "{business}": BUSINESS_NAME,
+}
+
+DEFAULT_SCRIPTS = {
+    TRIAL: """\
+You are {assistant}, calling on behalf of {business} in Chennai. You are calling {name}, who showed
 interest in Harry's. Your goal: tell them what Harry's does and invite them for a free trial and assessment
 session. Be warm, natural and never pushy — like a friendly coach on the phone, not a recording.
 
@@ -152,8 +165,7 @@ its points — but talk the way a person would:
    from there." If they're keen, book it (see BOOKING A FREE TRIAL).
 8. Memberships — after the invite, or whenever they ask: 3 months ₹35,000, 6 months ₹60,000, 1 year
    ₹80,000. The trial itself is free.
-9. Close — "Looking forward to seeing you soon!" Then end_call("booked") if a trial was booked, otherwise
-   end_call("completed").
+9. Close — "Looking forward to seeing you soon!"
 
 ━━━ IF THE CALLER ASKS… ━━━
 • "How much is it?" — give the three memberships, add that the trial is free, then return to the invite.
@@ -170,27 +182,16 @@ its points — but talk the way a person would:
 • "Send me details on WhatsApp" — say the team will follow up, and still offer to book a trial slot now.
   If they decline, end_call("callback_requested") with "wants details on WhatsApp" as the reason.
 • Anything the facts don't cover (parking, trainers' names, diet plans, discounts) — say you'll check with
-  the team; never make it up."""
-    return _assemble(script, _booking_rules(caller_phone, now, locations), _locations_block(locations),
-                     FACTS_BLOCK, DELIVERY_RULES, ENDING_RULES, DISCLOSURE_RULES)
+  the team; never make it up.""",
 
-
-# ── Campaign 2: missed class follow-up ────────────────────────────────────────
-
-def build_missed_class_prompt(lead_name: str = "", missed_date: str = "", now: Optional[datetime] = None,
-                              locations: list = ()) -> str:
-    name = _clean_name(lead_name) or "the member"
-    missed_date = (missed_date or "").strip()
-    when = f"on {missed_date}" if missed_date else "recently"
-    categories = ", ".join(MISSED_REASONS)
-    script = f"""\
-You are {ASSISTANT_NAME} from {BUSINESS_NAME} in Chennai, calling {name}, who is already a member. They
-missed their class {when}. {_today_line(now)} You are calling because the coaches noticed and care — you
-are a friendly check-in, never a telling-off. Do NOT pitch a trial or sell anything.
+    MISSED_CLASS: """\
+You are {assistant} from {business} in Chennai, calling {name}, who is already a member. They missed their
+class {missed_when}. You are calling because the coaches noticed and care — you are a friendly check-in,
+never a telling-off. Do NOT pitch a trial or sell anything.
 
 FLOW
 1. Confirm you are speaking with {name}. If it's the wrong person, apologise and end_call("wrong_number").
-2. Say the coaches noticed they missed class {when} and wanted to check that everything is okay.
+2. Say the coaches noticed they missed class {missed_when} and wanted to check that everything is okay.
 3. Gently ask what kept them away, then listen. If the answer is vague, ask one soft follow-up such as
    "Was it work, health, or something else?" If they'd rather not say, accept that.
 4. Respond to the reason with empathy, in one or two sentences:
@@ -202,17 +203,88 @@ FLOW
 5. Encourage regular attendance in a sentence or two: in strength training, results come from showing up
    consistently, and every missed week slows their progress.
 6. Ask when they expect to be back at class.
-7. Before saying goodbye, call record_missed_class_reason exactly once with:
-   category — one of: {categories}
-   reason — their reason in a few words, in English
-   coming_back — when they said they'd return (leave blank if they didn't say)
-8. Thank them, give one warm sign-off, then end_call("completed").
+7. Thank them and give one warm sign-off.
 
-If they want to pause or cancel their membership, or have a billing complaint, record the reason
-(category "cost" or "other") and offer to connect them with the team using transfer_to_human.
-Keep the whole call short — about one to two minutes."""
-    return _assemble(script, _locations_block(locations), FACTS_BLOCK, DELIVERY_RULES, ENDING_RULES,
-                     DISCLOSURE_RULES)
+If they want to pause or cancel their membership, or have a billing complaint, offer to connect them with
+the team using transfer_to_human. Keep the whole call short — about one to two minutes.""",
+}
+
+
+def _unwrap(text: str) -> str:
+    """Join hard-wrapped lines back into paragraphs (they're wrapped above only to keep
+    this file readable), keeping headings, numbered steps and bullets on their own lines."""
+    def starts_item(line: str) -> bool:
+        s = line.strip()
+        return (not s or s[0] in "•━" or (s.split(".", 1)[0].isdigit() and "." in s[:4])
+                or s.isupper())
+    out: list = []
+    for line in text.split("\n"):
+        prev = out[-1] if out else ""
+        if out and prev.strip() and not starts_item(line) and not prev.strip().startswith("━") \
+                and not prev.strip().isupper():
+            out[-1] = prev.rstrip() + " " + line.strip()
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+DEFAULT_SCRIPTS = {campaign: _unwrap(text) for campaign, text in DEFAULT_SCRIPTS.items()}
+
+
+def render_script(template: str, lead_name: str = "", missed_date: str = "",
+                  now: Optional[datetime] = None, fallback_name: str = "the person") -> str:
+    """Fill the supported tokens; any other braces in the text are left untouched."""
+    from db import now_local
+    now = now or now_local()
+    missed_date = (missed_date or "").strip()
+    values = {
+        "{name}": _clean_name(lead_name) or fallback_name,
+        "{missed_when}": f"on {missed_date}" if missed_date else "recently",
+        "{today}": f"{now.strftime('%A')}, {now.strftime('%Y-%m-%d')}",
+        "{assistant}": ASSISTANT_NAME,
+        "{business}": BUSINESS_NAME,
+    }
+    for token, value in values.items():
+        template = template.replace(token, value)
+    return template
+
+
+def _trial_outcome_rules() -> str:
+    return """\
+━━━ CALL OUTCOME (always applies) ━━━
+End every call with end_call: "booked" if a trial was booked, "not_interested" on a clear no,
+"callback_requested" if they asked to talk later, "wrong_number" if it wasn't them, otherwise "completed"."""
+
+
+def _missed_reason_rules() -> str:
+    categories = ", ".join(MISSED_REASONS)
+    return f"""\
+━━━ RECORDING THE REASON (always applies) ━━━
+Once you have spoken with the member, call record_missed_class_reason exactly once, before saying goodbye:
+  category — one of: {categories}
+  reason — their reason in a few words, in English
+  coming_back — when they said they'd be back at class (leave blank if they didn't say)
+If they wouldn't say, use category "not_given". For membership pauses, cancellations or billing complaints
+use "cost" or "other". Then end_call("completed") — or "wrong_number" if it wasn't them."""
+
+
+# ── Campaign 1: trial booking ─────────────────────────────────────────────────
+
+def build_trial_prompt(lead_name: str = "", caller_phone: str = "", now: Optional[datetime] = None,
+                       locations: list = (), script: Optional[str] = None) -> str:
+    body = render_script(script or DEFAULT_SCRIPTS[TRIAL], lead_name, now=now)
+    return _assemble(body, _trial_outcome_rules(), _booking_rules(caller_phone, now, locations),
+                     _locations_block(locations), FACTS_BLOCK, DELIVERY_RULES, ENDING_RULES, DISCLOSURE_RULES)
+
+
+# ── Campaign 2: missed class follow-up ────────────────────────────────────────
+
+def build_missed_class_prompt(lead_name: str = "", missed_date: str = "", now: Optional[datetime] = None,
+                              locations: list = (), script: Optional[str] = None) -> str:
+    body = render_script(script or DEFAULT_SCRIPTS[MISSED_CLASS], lead_name, missed_date, now,
+                         fallback_name="the member")
+    return _assemble(body, _today_line(now), _missed_reason_rules(), _locations_block(locations),
+                     FACTS_BLOCK, DELIVERY_RULES, ENDING_RULES, DISCLOSURE_RULES)
 
 
 # ── Incoming calls ────────────────────────────────────────────────────────────
@@ -238,12 +310,14 @@ directly to what the caller says. If they only say hello, ask "How can I help yo
 
 
 def build_prompt(campaign: str, lead_name: str = "", caller_phone: str = "",
-                 missed_date: str = "", now: Optional[datetime] = None, locations: list = ()) -> str:
+                 missed_date: str = "", now: Optional[datetime] = None, locations: list = (),
+                 script: Optional[str] = None) -> str:
     """System prompt for an outbound call in the given campaign. `locations` is the
-    branches list from the database (db.get_locations)."""
+    branches list (db.get_locations); `script` is the edited campaign script, if any
+    (db.get_campaign_script) — None uses the default."""
     if campaign_or_default(campaign) == MISSED_CLASS:
-        return build_missed_class_prompt(lead_name, missed_date, now, locations)
-    return build_trial_prompt(lead_name, caller_phone, now, locations)
+        return build_missed_class_prompt(lead_name, missed_date, now, locations, script)
+    return build_trial_prompt(lead_name, caller_phone, now, locations, script)
 
 
 def build_greeting() -> str:

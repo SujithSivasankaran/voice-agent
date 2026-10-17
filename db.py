@@ -216,6 +216,42 @@ async def delete_user(user_id: str) -> bool:
     return len(result.data or []) > 0
 
 
+# ── Campaign scripts (edited from the dashboard) ──────────────────────────────
+# Stored in the settings table as campaign_script:<campaign>. Empty / missing means
+# "use the default in prompts.DEFAULT_SCRIPTS".
+
+MAX_SCRIPT_LENGTH = 20000
+
+
+def _script_key(campaign: str) -> str:
+    return f"campaign_script:{campaign}"
+
+
+async def get_campaign_script(campaign: str) -> Optional[str]:
+    """The edited script for a campaign, or None if it still uses the default."""
+    return (await get_stored_setting(_script_key(campaign))).strip() or None
+
+
+async def get_campaign_script_info(campaign: str) -> dict:
+    """The edited script plus who changed it and when (None values if never edited)."""
+    try:
+        db = await _adb()
+        rows = (await db.table("settings").select("value, updated_at")
+                .eq("key", _script_key(campaign)).limit(1).execute()).data or []
+    except Exception as exc:
+        logger.warning("Could not read script for %s: %s", campaign, exc)
+        rows = []
+    row = rows[0] if rows else {}
+    return {"script": (row.get("value") or "").strip() or None, "updated_at": row.get("updated_at")}
+
+
+async def save_campaign_script(campaign: str, script: str) -> None:
+    script = (script or "").strip()
+    if len(script) > MAX_SCRIPT_LENGTH:
+        raise ValueError(f"the script is too long (max {MAX_SCRIPT_LENGTH} characters)")
+    await set_setting(_script_key(campaign), script)   # "" resets to the default
+
+
 # ── Error / event logs ────────────────────────────────────────────────────────
 
 async def log_error(source: str, message: str, detail: str = "", level: str = "error") -> None:

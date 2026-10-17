@@ -32,7 +32,7 @@ from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
 from livekit.plugins import noise_cancellation, silero
 
 from business import DEFAULT_VOICE, INBOUND, campaign_or_default
-from db import get_locations, init_db, log_call, log_error
+from db import get_campaign_script, get_locations, init_db, log_call, log_error
 from prompts import OPENING_INSTRUCTION, build_greeting, build_inbound_prompt, build_prompt
 from tools import CallTools
 from observability import record_call_usage, setup_langfuse
@@ -423,8 +423,14 @@ async def entrypoint(ctx: agents.JobContext):
     if is_inbound:
         system_prompt = build_inbound_prompt(caller_phone=phone_number, locations=locations)
     else:
+        # The campaign script is editable from the dashboard; None falls back to the default.
+        try:
+            script = await get_campaign_script(campaign)
+        except Exception as exc:
+            script = None
+            await _log("error", f"Could not load the {campaign} script, using the default: {exc}")
         system_prompt = build_prompt(campaign, lead_name, caller_phone=phone_number,
-                                     missed_date=missed_date, locations=locations)
+                                     missed_date=missed_date, locations=locations, script=script)
 
     # ── Build the agent session (before dialing, so its model connection can be
     #    warmed during the ring) ────────────────────────────────────────────────

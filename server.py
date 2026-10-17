@@ -23,7 +23,7 @@ from business import (
     ASSISTANT_NAME, BUSINESS_NAME, CAMPAIGNS, DEFAULT_VOICE, FACTS, MISSED_CLASS, MISSED_REASONS,
     TRIAL, campaign_or_default, schedule_groups, slots_for_weekday,
 )
-from prompts import build_prompt
+from prompts import DEFAULT_SCRIPTS, SCRIPT_TOKENS, build_prompt
 from db import (
     init_db, log_error, now_local, get_all_settings, get_logs, clear_errors,
     TrialSlotUnavailable, book_trial, get_all_trials, cancel_trial, next_free_trial_slots,
@@ -36,6 +36,7 @@ from db import (
     get_contact_memory, add_contact_memory,
     add_dnc, remove_dnc, list_dnc, get_month_to_date_spend,
     get_locations, create_location, update_location, delete_location,
+    get_campaign_script, get_campaign_script_info, save_campaign_script,
     list_users, get_user, insert_user, update_user_fields, delete_user, ROLES,
 )
 import compliance
@@ -626,15 +627,74 @@ async def remove_location(location_id: str):
     return {"status": "deleted"}
 
 
-@app.get("/prompts/{campaign}")
-async def campaign_prompt(campaign: str):
-    """The exact script Tara is given for a campaign. Per-call details (name, number,
-    missed date) are shown as [placeholders]; today's date is filled in at call time."""
+def _check_campaign(campaign: str) -> None:
     if campaign not in CAMPAIGNS:
         raise HTTPException(404, "Unknown campaign")
-    prompt = build_prompt(campaign, "[name]", caller_phone="[their number]", missed_date="[missed date]",
-                          locations=await get_locations())
+
+
+async def _full_prompt(campaign: str, script: Optional[str]) -> str:
+    """The whole prompt Tara would get, with per-call details shown as [placeholders]."""
+    return build_prompt(campaign, "[name]", caller_phone="[their number]", missed_date="[missed date]",
+                        locations=await get_locations(), script=script)
+
+
+@app.get("/prompts/{campaign}")
+async def campaign_prompt(campaign: str):
+    """The exact prompt Tara is given for a campaign, including the automatic parts."""
+    _check_campaign(campaign)
+    prompt = await _full_prompt(campaign, await get_campaign_script(campaign))
     return {"campaign": campaign, "label": CAMPAIGNS[campaign]["label"], "prompt": prompt}
+
+
+@app.post("/prompts/{campaign}/preview")
+async def preview_campaign_prompt(campaign: str, request: Request):
+    """The full prompt for a script that hasn't been saved yet."""
+    _check_campaign(campaign)
+    body = await request.json()
+    prompt = await _full_prompt(campaign, (body.get("script") or "").strip() or None)
+    return {"campaign": campaign, "label": CAMPAIGNS[campaign]["label"], "prompt": prompt}
+
+
+# ── Campaign scripts (anyone can read; only admins can change) ────────────────
+
+@app.get("/scripts/{campaign}")
+async def get_script(campaign: str, request: Request):
+    _check_campaign(campaign)
+    info = await get_campaign_script_info(campaign)
+    return {
+        "campaign": campaign, "label": CAMPAIGNS[campaign]["label"],
+        "script": info["script"] or DEFAULT_SCRIPTS[campaign], "is_default": info["script"] is None,
+        "updated_at": info["updated_at"] if info["script"] else None,
+        "default": DEFAULT_SCRIPTS[campaign], "tokens": SCRIPT_TOKENS, "can_edit": _is_admin(request),
+    }
+
+
+@app.put("/scripts/{campaign}")
+async def put_script(campaign: str, request: Request):
+    _check_campaign(campaign)
+    if not _is_admin(request):
+        raise HTTPException(403, "Only admins can change the script")
+    script = ((await request.json()).get("script") or "").strip()
+    if not script:
+        raise HTTPException(400, "The script can't be empty — use Reset to go back to the default")
+    # Saving the default text unchanged is the same as using the default.
+    try:
+        await save_campaign_script(campaign, "" if script == DEFAULT_SCRIPTS[campaign].strip() else script)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    logger.info("%s script updated by %s", campaign, request.state.user)
+    await log_error("server", f"{CAMPAIGNS[campaign]['label']} script updated by {request.state.user}", "", "info")
+    return {"status": "saved"}
+
+
+@app.delete("/scripts/{campaign}")
+async def reset_script(campaign: str, request: Request):
+    _check_campaign(campaign)
+    if not _is_admin(request):
+        raise HTTPException(403, "Only admins can change the script")
+    await save_campaign_script(campaign, "")
+    await log_error("server", f"{CAMPAIGNS[campaign]['label']} script reset to default by {request.state.user}", "", "info")
+    return {"status": "reset"}
 
 
 @app.post("/call/single")

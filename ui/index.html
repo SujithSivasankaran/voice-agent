@@ -383,6 +383,12 @@
   .camp-brand { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .camp-body { padding: 14px 20px 16px; flex: 1; }
   .camp-tabs { margin-bottom: 16px; }
+  .script-text { font-family: inherit; font-size: 13.5px; line-height: 1.6; min-height: 320px; }
+  .script-text[readonly] { background: var(--surface-2); }
+  .script-status { font-size: 13px; color: var(--muted); }
+  .script-status .badge { margin-right: 6px; }
+  .script-footer .grow { flex: 1; }
+  .token { font-family: var(--mono); font-size: 12px; background: var(--surface-3); border-radius: 6px; padding: 1px 6px; margin: 0 2px; white-space: nowrap; }
   .stack-cell { display: inline-flex; flex-direction: column; align-items: inherit; gap: 1px; }
   .sheet { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
   .sheet-head, .sheet-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 8px; align-items: center; padding: 6px 8px; }
@@ -526,6 +532,8 @@
     .modal-body { padding: 16px; }
     .modal-footer { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-radius: 0; }
     .modal-footer .btn { flex: 1; }
+    .script-footer .grow { display: none; }
+    .script-text { min-height: 50vh; }
 
     #toast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); align-items: center; }
     .toast-msg { width: 100%; }
@@ -727,7 +735,7 @@
           <div class="camp-title">Trial booking</div>
           <div class="camp-brand">Invite new leads to Harry's Fitcamp and book a free one-hour trial</div>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="viewPrompt('trial')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
+        <button class="btn btn-outline btn-sm" onclick="openScript('trial')"><svg class="ico"><use href="#i-edit"/></svg>Script</button>
       </div>
       <div class="camp-body">
         <div class="tabs camp-tabs" role="tablist">
@@ -779,7 +787,7 @@
           <div class="camp-title">Missed class</div>
           <div class="camp-brand">Ask members why they missed class, record it, and encourage them to come regularly</div>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="viewPrompt('missed_class')"><svg class="ico"><use href="#i-file"/></svg>View script</button>
+        <button class="btn btn-outline btn-sm" onclick="openScript('missed_class')"><svg class="ico"><use href="#i-edit"/></svg>Script</button>
       </div>
       <div class="camp-body">
         <div class="tabs camp-tabs" role="tablist">
@@ -1129,11 +1137,35 @@
   </div>
 </div>
 
+<!-- Campaign script editor -->
+<div class="modal-overlay" id="modal-script" role="dialog" aria-modal="true" aria-labelledby="script-title">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <div><h2 id="script-title">Script</h2><div class="sub" id="script-sub">What Tara says on this campaign's calls. Changes apply from the next call.</div></div>
+      <button class="icon-btn modal-close" onclick="closeScript()" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body stack">
+      <div class="script-status" id="script-status"></div>
+      <textarea id="script-text" class="script-text" rows="22" spellcheck="true" aria-label="Campaign script"></textarea>
+      <div class="hint">
+        <div><b>Placeholders</b> — filled in on each call: <span id="script-tokens"></span></div>
+        <div style="margin-top:6px"><b>Added automatically</b> — you don't need to write these: today's date, the branches and timings, how to book a trial (or record the missed-class reason), the business facts, and the rules for ending calls. Use <b>Preview full prompt</b> to see everything Tara gets.</div>
+      </div>
+    </div>
+    <div class="modal-footer script-footer">
+      <button class="btn btn-ghost danger edit-only" id="script-reset" onclick="resetScript()"><svg class="ico"><use href="#i-undo"/></svg>Reset to default</button>
+      <span class="grow"></span>
+      <button class="btn btn-outline" onclick="previewScript()"><svg class="ico"><use href="#i-file"/></svg>Preview full prompt</button>
+      <button class="btn btn-primary edit-only" id="script-save" onclick="saveScript()">Save script</button>
+    </div>
+  </div>
+</div>
+
 <!-- Campaign script -->
 <div class="modal-overlay" id="modal-prompt" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
   <div class="modal modal-lg">
     <div class="modal-head">
-      <div><h2 id="prompt-modal-title">Script</h2><div class="sub">Exactly what Tara is told on this campaign's calls. Text in [brackets] is filled in for each call.</div></div>
+      <div><h2 id="prompt-modal-title">Full prompt</h2><div class="sub">Exactly what Tara is told on this campaign's calls, including the automatic parts. Text in [brackets] is filled in for each call.</div></div>
       <button class="icon-btn modal-close" onclick="closeModal('modal-prompt')" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
     </div>
     <div class="modal-body"><pre class="prompt-view" id="prompt-modal-body"></pre></div>
@@ -1342,7 +1374,7 @@ window.addEventListener('popstate', () => go((location.hash || '#dashboard').sli
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   const open = [...document.querySelectorAll('.modal-overlay.open')].pop();
-  if (open) closeModal(open.id); else closeNav();
+  if (open) (open.id === 'modal-script' ? closeScript() : closeModal(open.id)); else closeNav();
 });
 
 function onPageLoad(page) {
@@ -1670,14 +1702,82 @@ document.querySelectorAll('.list-drop').forEach(dz => {
   });
 });
 
+// ── Campaign script editor ────────────────────────────────────────────────────
+let _script = { campaign: '', saved: '', canEdit: false };
+
+async function openScript(campaign) {
+  try {
+    const r = await api('/scripts/' + campaign);
+    _script = { campaign, saved: r.script, canEdit: r.can_edit, label: r.label };
+    document.getElementById('script-title').textContent = r.label + ' — script';
+    document.getElementById('script-sub').textContent = r.can_edit
+      ? "What Tara says on this campaign's calls. Changes apply from the next call."
+      : "What Tara says on this campaign's calls. Only an admin can change it.";
+    document.getElementById('script-status').innerHTML = r.is_default
+      ? `${badge('info', 'Default script')}You haven't changed this script.`
+      : `${badge('active', 'Edited')}Last changed ${fmtTime(r.updated_at)}.`;
+    const ta = document.getElementById('script-text');
+    ta.value = r.script;
+    ta.readOnly = !r.can_edit;
+    document.getElementById('script-tokens').innerHTML = Object.entries(r.tokens)
+      .map(([t, d]) => `<span class="token" title="${esc(d)}">${esc(t)}</span>`).join(' ');
+    document.querySelectorAll('#modal-script .edit-only').forEach(b => { b.style.display = r.can_edit ? '' : 'none'; });
+    document.getElementById('script-reset').disabled = r.is_default;
+    openModal('modal-script');
+  } catch(e) { toast('Could not load the script: ' + e.message, false); }
+}
+
+function scriptDirty() {
+  return _script.canEdit && document.getElementById('script-text').value.trim() !== (_script.saved || '').trim();
+}
+
+function closeScript() {
+  if (scriptDirty() && !confirm('Discard your changes to the script?')) return;
+  closeModal('modal-script');
+}
+
+async function saveScript() {
+  const script = document.getElementById('script-text').value.trim();
+  if (!script) { toast('The script is empty — use Reset to go back to the default', false); return; }
+  await withBusy(document.getElementById('script-save'), async () => {
+    try {
+      await api('/scripts/' + _script.campaign, { method: 'PUT', body: JSON.stringify({ script }) });
+      _script.saved = script;
+      toast(_script.label + ' script saved — used from the next call');
+      closeModal('modal-script');
+    } catch(e) { toast('Could not save: ' + e.message, false); }
+  });
+}
+
+async function resetScript() {
+  if (!confirm('Go back to the original script? Your edits will be lost.')) return;
+  try {
+    await api('/scripts/' + _script.campaign, { method: 'DELETE' });
+    toast('Script reset to the default');
+    closeModal('modal-script');
+    openScript(_script.campaign);
+  } catch(e) { toast(e.message, false); }
+}
+
+async function previewScript() {
+  try {
+    const r = await api(`/prompts/${_script.campaign}/preview`, { method: 'POST',
+      body: JSON.stringify({ script: document.getElementById('script-text').value }) });
+    showPrompt(r.label + (scriptDirty() ? ' — full prompt (unsaved changes)' : ' — full prompt'), r.prompt);
+  } catch(e) { toast('Could not build the preview: ' + e.message, false); }
+}
+
 let _promptText = '';
+function showPrompt(title, text) {
+  _promptText = text;
+  document.getElementById('prompt-modal-title').textContent = title;
+  document.getElementById('prompt-modal-body').textContent = text;
+  openModal('modal-prompt');
+}
 async function viewPrompt(campaign) {
   try {
     const r = await api('/prompts/' + campaign);
-    _promptText = r.prompt;
-    document.getElementById('prompt-modal-title').textContent = r.label + ' — script';
-    document.getElementById('prompt-modal-body').textContent = r.prompt;
-    openModal('modal-prompt');
+    showPrompt(r.label + ' — full prompt', r.prompt);
   } catch(e) { toast('Could not load the script: ' + e.message, false); }
 }
 
@@ -2104,7 +2204,7 @@ function closeModal(id) {
 
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', e => {
-    if (e.target === overlay) closeModal(overlay.id);
+    if (e.target === overlay) (overlay.id === 'modal-script' ? closeScript() : closeModal(overlay.id));
   });
 });
 
