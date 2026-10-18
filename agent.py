@@ -185,7 +185,6 @@ _google_realtime = None
 _google_beta_realtime = None
 _google_llm = None
 _google_tts = None
-_gemini_tts = None
 
 try:
     from livekit.plugins import google as _gp
@@ -204,25 +203,13 @@ try:
         _google_tts = _gp.TTS
     except AttributeError:
         pass
-    try:
-        # Gemini TTS (Gemini API via GOOGLE_API_KEY) shares Gemini Live's prebuilt
-        # voices, so session.say() can speak in the SAME voice as the live model.
-        _gemini_tts = _gp.beta.GeminiTTS
-        logger.info("Loaded google.beta.GeminiTTS")
-    except AttributeError:
-        logger.info("google.beta.GeminiTTS unavailable (needs livekit-plugins-google>=1.5)")
 except ImportError:
     logger.warning("livekit-plugins-google not installed")
 
 _deepgram_stt = None
-_deepgram_tts = None
 try:
     from livekit.plugins import deepgram as _dg
-    _deepgram_stt = _dg.STT
-    try:
-        _deepgram_tts = _dg.TTS
-    except AttributeError:
-        pass
+    _deepgram_stt = _dg.STT   # only for the non-realtime fallback pipeline
 except ImportError:
     pass
 
@@ -282,39 +269,9 @@ def _build_session(
             realtime_kwargs["session_resumption"]         = _session_resumption_cfg
             realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
 
-        # TTS ATTACHED to the session for session.say() — used only for the INBOUND
-        # greeting (outbound has no scripted opener). Deepgram (aura) streams first
-        # audio in ~200ms but in a different voice; Gemini TTS matches the live voice
-        # but is slower to start. Default to Deepgram for speed; set GREETING_TTS=gemini
-        # to greet inbound callers in the matching Gemini voice instead. Either way the
-        # other is used as a fallback if the preferred one is unavailable.
-        session_kwargs: dict = {"llm": RealtimeClass(**realtime_kwargs)}
-        prefer_gemini = os.environ.get("GREETING_TTS", "deepgram").strip().lower() == "gemini"
-
-        def _gemini_greeting_tts():
-            return _gemini_tts(
-                model=os.environ.get("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
-                voice_name=gemini_voice,
-            )
-
-        def _deepgram_greeting_tts():
-            return _deepgram_tts(model=os.environ.get("DEEPGRAM_TTS_MODEL", "aura-asteria-en"))
-
-        order = []
-        if prefer_gemini:
-            if _gemini_tts is not None:   order.append((f"Gemini TTS (voice={gemini_voice})", _gemini_greeting_tts))
-            if _deepgram_tts is not None: order.append(("Deepgram (fast) fallback", _deepgram_greeting_tts))
-        else:
-            if _deepgram_tts is not None: order.append(("Deepgram (fast first-audio)", _deepgram_greeting_tts))
-            if _gemini_tts is not None:   order.append((f"Gemini TTS (voice={gemini_voice}) fallback", _gemini_greeting_tts))
-        for label, factory in order:
-            try:
-                session_kwargs["tts"] = factory()
-                logger.info("Greeting TTS: %s", label)
-                break
-            except Exception as exc:
-                logger.warning("Greeting TTS %s failed (%s)", label, exc)
-        return AgentSession(**session_kwargs)
+        # No separate text-to-speech engine: every word on every call — including the
+        # incoming-call greeting — is spoken by the live model in Tara's one voice.
+        return AgentSession(llm=RealtimeClass(**realtime_kwargs))
 
     if _google_llm is None:
         raise RuntimeError(
@@ -540,15 +497,18 @@ async def entrypoint(ctx: agents.JobContext):
 
         # Open the call the moment it connects. The two directions warm up differently:
         if is_inbound:
-            # INBOUND: play a scripted opener instantly via the session's attached TTS
-            # (Deepgram ~200 ms first audio) so the caller hears us the instant they're
-            # connected. The inbound prompt tells the model the greeting was already
-            # spoken, so it never greets twice. allow_interruptions=False lets the short
-            # opener play cleanly over just-answered line noise / the caller's "hello".
+            # INBOUND: the live model speaks the fixed greeting word for word, so the
+            # whole call is in Tara's one voice (the same way outbound calls open).
+            # allow_interruptions=False lets the short opener play cleanly over
+            # just-answered line noise / the caller's "hello". Not awaited, like outbound.
             try:
-                await session.say(build_greeting(), allow_interruptions=False)
+                session.generate_reply(
+                    instructions=f'Greet the caller now by saying exactly: "{build_greeting()}" '
+                                 'Then stop and listen.',
+                    allow_interruptions=False,
+                )
             except Exception as exc:
-                logger.warning("Greeting via say() failed (%s) — agent will greet reactively", exc)
+                logger.warning("Inbound greeting failed (%s) — agent will greet reactively", exc)
         else:
             # OUTBOUND: don't wait for the callee to speak. The model connection was
             # already warmed during the ring (above), so this opening turn is generated

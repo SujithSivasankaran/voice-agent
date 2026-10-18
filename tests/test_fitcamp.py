@@ -184,7 +184,7 @@ def test_placeholder_name_is_not_spoken():
 
 def test_inbound_prompt_does_not_greet_again():
     p = prompts.build_inbound_prompt(caller_phone="+919876543210", now=NOW)
-    assert "ALREADY been spoken" in p and "book_trial" in p
+    assert "never greet again" in p and "book_trial" in p
 
 
 # ── Call lists ────────────────────────────────────────────────────────────────
