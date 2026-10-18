@@ -29,7 +29,7 @@ ssl.create_default_context = _certifi_ssl
 
 from livekit import agents, api
 from livekit.agents import Agent, AgentSession, RoomInputOptions, metrics
-from livekit.plugins import noise_cancellation, silero
+from livekit.plugins import noise_cancellation
 
 from business import DEFAULT_VOICE, INBOUND, campaign_or_default
 from db import get_campaign_script, get_locations, init_db, log_call, log_error
@@ -179,13 +179,12 @@ def _extract_transcript(session) -> str:
     return "\n".join(lines)
 
 
-# ── Import Google plugin paths ────────────────────────────────────────────────
+# ── Gemini Live (realtime) model ──────────────────────────────────────────────
+# Every call runs on Gemini Live: it hears the caller and speaks in Tara's voice
+# itself, so there is no separate speech-to-text or text-to-speech service.
 
 _google_realtime = None
 _google_beta_realtime = None
-_google_llm = None
-_google_tts = None
-
 try:
     from livekit.plugins import google as _gp
     try:
@@ -198,20 +197,8 @@ try:
         logger.info("Loaded google.beta.realtime.RealtimeModel (beta path)")
     except AttributeError:
         pass
-    try:
-        _google_llm = _gp.LLM
-        _google_tts = _gp.TTS
-    except AttributeError:
-        pass
 except ImportError:
     logger.warning("livekit-plugins-google not installed")
-
-_deepgram_stt = None
-try:
-    from livekit.plugins import deepgram as _dg
-    _deepgram_stt = _dg.STT   # only for the non-realtime fallback pipeline
-except ImportError:
-    pass
 
 
 # ── Session factory ───────────────────────────────────────────────────────────
@@ -223,9 +210,9 @@ def _build_session(
     voice: Optional[str] = None,
 ) -> AgentSession:
     """
-    Build AgentSession with Gemini Live or pipeline fallback.
+    Build the AgentSession on Gemini Live.
 
-    model / voice override the VPS env vars for this specific call only.
+    voice defaults to Tara's voice (business.DEFAULT_VOICE); model to GEMINI_MODEL.
 
     SILENCE-PREVENTION (all 3 required for Gemini Live):
     1. SessionResumptionConfig(transparent=True) — auto-reconnect on timeout
@@ -233,57 +220,44 @@ def _build_session(
     3. RealtimeInputConfig(END_SENSITIVITY_LOW) — less aggressive VAD, 2s silence
     """
     gemini_model = model or os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
-    gemini_voice = voice or os.environ.get("GEMINI_TTS_VOICE", "Aoede")
-    use_realtime = os.environ.get("USE_GEMINI_REALTIME", "true").lower() != "false"
+    gemini_voice = voice or DEFAULT_VOICE
+    RealtimeClass = _google_realtime or _google_beta_realtime
+    if RealtimeClass is None:
+        raise RuntimeError("Gemini Live is unavailable — install livekit-plugins-google>=1.5")
 
-    RealtimeClass = _google_realtime or (_google_beta_realtime if use_realtime else None)
-
-    if use_realtime and RealtimeClass is not None:
-        logger.info("SESSION: Gemini Live realtime (%s, voice=%s)", gemini_model, gemini_voice)
-        try:
-            from google.genai import types as _gt
-            _realtime_input_cfg = _gt.RealtimeInputConfig(
-                automatic_activity_detection=_gt.AutomaticActivityDetection(
-                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
-                    silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "300")),
-                    prefix_padding_ms=200,
-                ),
-            )
-            _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
-            _ctx_compression_cfg = _gt.ContextWindowCompressionConfig(
-                trigger_tokens=25600,
-                sliding_window=_gt.SlidingWindow(target_tokens=12800),
-            )
-            logger.info("Silence-prevention config applied")
-        except Exception as _cfg_err:
-            logger.warning("Silence-prevention config failed (non-fatal): %s", _cfg_err)
-            _realtime_input_cfg = None
-            _session_resumption_cfg = None
-            _ctx_compression_cfg = None
-
-        realtime_kwargs: dict = dict(
-            model=gemini_model, voice=gemini_voice, instructions=system_prompt,
+    logger.info("SESSION: Gemini Live realtime (%s, voice=%s)", gemini_model, gemini_voice)
+    try:
+        from google.genai import types as _gt
+        _realtime_input_cfg = _gt.RealtimeInputConfig(
+            automatic_activity_detection=_gt.AutomaticActivityDetection(
+                end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_HIGH,
+                silence_duration_ms=int(os.environ.get("VAD_SILENCE_MS", "300")),
+                prefix_padding_ms=200,
+            ),
         )
-        if _realtime_input_cfg is not None:
-            realtime_kwargs["realtime_input_config"]      = _realtime_input_cfg
-            realtime_kwargs["session_resumption"]         = _session_resumption_cfg
-            realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
-
-        # No separate text-to-speech engine: every word on every call — including the
-        # incoming-call greeting — is spoken by the live model in Tara's one voice.
-        return AgentSession(llm=RealtimeClass(**realtime_kwargs))
-
-    if _google_llm is None:
-        raise RuntimeError(
-            "No Google AI backend found. "
-            "Run: pip install 'livekit-plugins-google>=1.0'"
+        _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
+        _ctx_compression_cfg = _gt.ContextWindowCompressionConfig(
+            trigger_tokens=25600,
+            sliding_window=_gt.SlidingWindow(target_tokens=12800),
         )
+        logger.info("Silence-prevention config applied")
+    except Exception as _cfg_err:
+        logger.warning("Silence-prevention config failed (non-fatal): %s", _cfg_err)
+        _realtime_input_cfg = None
+        _session_resumption_cfg = None
+        _ctx_compression_cfg = None
 
-    logger.info("SESSION: pipeline (Deepgram STT + Gemini LLM + Google TTS)")
-    stt = _deepgram_stt(model="nova-3", language="multi") if _deepgram_stt else None
-    tts = _google_tts() if _google_tts else None
-    vad = silero.VAD.load()
-    return AgentSession(stt=stt, llm=_google_llm(model=gemini_model), tts=tts, vad=vad)
+    realtime_kwargs: dict = dict(
+        model=gemini_model, voice=gemini_voice, instructions=system_prompt,
+    )
+    if _realtime_input_cfg is not None:
+        realtime_kwargs["realtime_input_config"]      = _realtime_input_cfg
+        realtime_kwargs["session_resumption"]         = _session_resumption_cfg
+        realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
+
+    # No separate text-to-speech engine: every word on every call — including the
+    # incoming-call greeting — is spoken by the live model in Tara's one voice.
+    return AgentSession(llm=RealtimeClass(**realtime_kwargs))
 
 
 # ── Main entrypoint ───────────────────────────────────────────────────────────
@@ -391,7 +365,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     # ── Build the agent session (before dialing, so its model connection can be
     #    warmed during the ring) ────────────────────────────────────────────────
-    # Tara's voice is fixed in business.py (it overrides GEMINI_TTS_VOICE, as the brand voice did).
+    # Tara's voice is fixed in business.py and used for every call.
     session_voice = DEFAULT_VOICE
     try:
         tools_instance = CallTools(ctx, phone_number, lead_name, campaign=campaign, missed_date=missed_date)
@@ -580,16 +554,6 @@ async def entrypoint(ctx: agents.JobContext):
         await _log("info", f"Call ended — phone={phone_number}")
 
 
-# ── Prewarm: load VAD model before first call ─────────────────────────────────
-
-def prewarm(proc: agents.JobProcess) -> None:
-    try:
-        proc.userdata["vad"] = silero.VAD.load()
-        logger.info("VAD prewarmed")
-    except Exception as exc:
-        logger.warning("VAD prewarm failed: %s", exc)
-
-
 # ── Worker entry ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -597,7 +561,6 @@ if __name__ == "__main__":
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
             agent_name="outbound-caller",
         )
     )

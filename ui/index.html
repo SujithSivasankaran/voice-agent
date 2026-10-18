@@ -2084,8 +2084,6 @@ const SETTINGS_SCHEMA = [
   { section: 'Google Gemini', keys: [
     { key:'GOOGLE_API_KEY',      label:'API Key',         desc:'AIzaSy…', secret:true },
     { key:'GEMINI_MODEL',        label:'Model ID',        desc:'gemini-3.1-flash-live-preview' },
-    { key:'GEMINI_TTS_VOICE',    label:'TTS Voice',       desc:'Aoede | Charon | Fenrir | Kore | Puck' },
-    { key:'USE_GEMINI_REALTIME', label:'Use Realtime',    desc:'true | false' },
   ]},
   { section: 'Vobiz SIP', keys: [
     { key:'VOBIZ_SIP_DOMAIN',      label:'SIP Domain',      desc:'xxxxx.sip.vobiz.ai' },
@@ -2113,9 +2111,6 @@ const SETTINGS_SCHEMA = [
     { key:'S3_REGION',            label:'Region',           desc:'ap-northeast-1' },
     { key:'S3_BUCKET',            label:'Bucket',           desc:'call-recordings' },
     { key:'RECORDING_SYNC_SECONDS', label:'Sync interval',    desc:'60' },
-  ]},
-  { section: 'Deepgram (pipeline fallback STT)', keys: [
-    { key:'DEEPGRAM_API_KEY', label:'API Key', desc:'xxx…', secret:true },
   ]},
 ];
 

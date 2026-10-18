@@ -7,7 +7,7 @@
 
 BUSINESS_NAME = "Harry's Fitcamp"
 ASSISTANT_NAME = "Tara"
-DEFAULT_VOICE = "Leda"  # Gemini Live voice; overrides GEMINI_TTS_VOICE
+DEFAULT_VOICE = "Leda"  # Gemini Live voice used for every call, inbound and outbound
 
 # ── Trial booking ─────────────────────────────────────────────────────────────
 # Every trial is a one-hour, coach-led session; one trial per branch per start time.
