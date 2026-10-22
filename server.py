@@ -47,7 +47,8 @@ import auth
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-server")
 
-app = FastAPI(title="T-800", version="1.0.0")
+# No public API explorer (/docs, /redoc, /openapi.json) in production.
+app = FastAPI(title="Harry's Fitcamp", version="1.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 # The dashboard is served same-origin, so it needs NO CORS. Only add cross-origin
 # access if ALLOWED_ORIGINS is explicitly set (comma-separated). We never combine a
@@ -68,7 +69,7 @@ if _allowed_origins:
 # the login endpoints, logout, health check, and the favicon.
 PUBLIC_PATHS = {"/login", "/logout", "/health", "/favicon.ico"}
 # Paths only the admin role may use. Spend figures are also stripped for employees (see _hide_cost).
-ADMIN_ONLY_PREFIXES = ("/users",)
+ADMIN_ONLY_PREFIXES = ("/users", "/settings", "/logs")
 
 
 def _is_admin(request: Request) -> bool:
@@ -536,10 +537,15 @@ async def root():
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
-async def health():
+async def health(request: Request):
+    """Public liveness check — just "ok" and the display timezone. Signed-in admins
+    also get diagnostics (which database, integrations configured, tables reachable)."""
     from db import APP_TIMEZONE, _adb
-    # Which Supabase project this deploy talks to (the project id is public — it's in
-    # every Supabase URL), and whether the newest tables are there. No secrets.
+    out = {"status": "ok", "timestamp": now_local().isoformat(), "timezone": APP_TIMEZONE}
+    username = auth.verify_session_token(request.cookies.get(auth.SESSION_COOKIE_NAME, ""))
+    principal = await auth.resolve_principal(username) if username else None
+    if not principal or principal["role"] != auth.ADMIN:
+        return out
     url = os.environ.get("SUPABASE_URL", "")
     database = {
         "project": url.split("//", 1)[-1].split(".", 1)[0] if url else None,
@@ -552,14 +558,7 @@ async def health():
             database[f"{table}_table"] = "ok"
         except Exception:
             database[f"{table}_table"] = "missing or unreachable"
-    return {
-        "status": "ok",
-        "timestamp": now_local().isoformat(),
-        "timezone": APP_TIMEZONE,
-        "database": database,
-        "langfuse": langfuse_status(),
-        "recordings": recording_sync_status(),
-    }
+    return {**out, "database": database, "langfuse": langfuse_status(), "recordings": recording_sync_status()}
 
 
 # ── Single call ───────────────────────────────────────────────────────────────
@@ -568,7 +567,7 @@ _DISPATCH_ERRORS = {
     "suppressed": (409, "Number is on the Do-Not-Call list"),
     "blocked_window": (409, "Outside the permitted calling hours"),
     "spend_cap": (409, "Monthly spend cap reached — call refused"),
-    "failed": (500, "Failed to dispatch call — check LiveKit credentials and trunk ID"),
+    "failed": (500, "Couldn't place the call right now — please try again in a minute. If it keeps failing, contact support."),
 }
 
 

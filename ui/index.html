@@ -627,8 +627,8 @@
     <div class="nav-label">Configure</div>
     <ul>
       <li class="admin-only"><a href="#users" class="nav-link" data-page="users" data-tip="Users"><svg class="ico"><use href="#i-users"/></svg><span class="txt">Users</span></a></li>
-      <li><a href="#settings" class="nav-link" data-page="settings" data-tip="Settings"><svg class="ico"><use href="#i-settings"/></svg><span class="txt">Settings</span></a></li>
-      <li><a href="#live-logs" class="nav-link" data-page="live-logs" data-tip="Live Logs"><svg class="ico"><use href="#i-activity"/></svg><span class="txt">Live Logs</span></a></li>
+      <li class="admin-only"><a href="#settings" class="nav-link" data-page="settings" data-tip="Settings"><svg class="ico"><use href="#i-settings"/></svg><span class="txt">Settings</span></a></li>
+      <li class="admin-only"><a href="#live-logs" class="nav-link" data-page="live-logs" data-tip="Live Logs"><svg class="ico"><use href="#i-activity"/></svg><span class="txt">Live Logs</span></a></li>
     </ul>
   </div>
   <div class="nav-foot">
@@ -703,7 +703,7 @@
     <div class="card-body">
       <dl class="facts-meta" id="biz-meta"></dl>
       <div class="facts-text" id="biz-facts">Loading…</div>
-      <div class="hint" style="margin-top:12px">Given to Tara on every call, together with the locations above. To change these facts, edit <code class="mono">business.py</code> and redeploy.</div>
+      <div class="hint" style="margin-top:12px">Tara uses these facts on every call, together with the branches and timings above.</div>
     </div>
   </div>
 
@@ -983,7 +983,7 @@
   </div>
   <div class="callout">
     <svg class="ico"><use href="#i-info"/></svg>
-    <div><strong>Managed in Coolify → Environment variables.</strong> To change a value, update it there and redeploy. Secret keys only show whether they're set; their values are never sent to the browser.</div>
+    <div><strong>These are set on the server.</strong> To change one, ask whoever manages your deployment. Secret keys only show whether they're set; their values are never sent to the browser.</div>
   </div>
   <div id="settings-container" class="settings-grid"></div>
 </section>
@@ -1354,8 +1354,11 @@ const PAGE_TITLES = {
 function openNav()  { document.body.classList.add('nav-open'); }
 function closeNav() { document.body.classList.remove('nav-open'); }
 
+const ADMIN_PAGES = ['users', 'settings', 'live-logs'];
+
 function go(page, push = true) {
   if (!document.getElementById('page-' + page)) page = 'dashboard';
+  if (ADMIN_PAGES.includes(page) && !isAdmin()) page = 'dashboard';
   document.querySelectorAll('nav a[data-page]').forEach(x => x.classList.toggle('active', x.dataset.page === page));
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-' + page));
   document.getElementById('mobile-title').textContent = PAGE_TITLES[page] || '';
@@ -1435,7 +1438,7 @@ async function loadBusinessFacts() {
     const b = BUSINESS;
     const row = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`;
     document.getElementById('biz-meta').innerHTML =
-      row('Business', b.name) + row('Assistant', `${b.assistant} (voice: ${b.voice})`);
+      row('Business', b.name) + row('Assistant', b.assistant);
     document.getElementById('biz-facts').textContent = b.facts;
     renderLocations(b.locations || []);
   } catch(e) { document.getElementById('biz-facts').textContent = 'Could not load business information.'; }
@@ -2350,7 +2353,7 @@ async function deleteUser(id) {
 syncThemeButton();
 loadMe().then(() => {
   const page = (location.hash || '#dashboard').slice(1);
-  go(page === 'users' && !isAdmin() ? 'dashboard' : page, false);
+  go(page, false);
 });
 </script>
 </body>
