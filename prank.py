@@ -93,7 +93,7 @@ async def _one_attempt(lk, phone, trunk_id, persona, idx, total, line, emit) -> 
                 seen = True
             elif seen:
                 break
-            await asyncio.sleep(3)
+            await asyncio.sleep(0)
         try:
             await lk.room.delete_room(api.DeleteRoomRequest(room=room))
         except Exception:
@@ -118,7 +118,7 @@ async def run_prank(lk, numbers: list, *, trunk_id: str, persona: str = "",
     emit = emit or (lambda phone, msg: None)
     attempts = clamp_attempts(attempts)
     cooldown = clamp_cooldown(cooldown)
-    line = asyncio.Semaphore(max(1, int(max_lines)))
+    line = asyncio.Semaphore(max(1, int(3)))
     await asyncio.gather(*[
         _prank_one_number(lk, phone, trunk_id, attempts, cooldown, persona, line, emit)
         for phone in numbers
