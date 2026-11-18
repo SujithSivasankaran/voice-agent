@@ -603,8 +603,8 @@ async def prank_start(request: Request):
     job_id = uuid.uuid4().hex[:8]
     _prank_jobs[job_id] = {
         "id": job_id, "created": now_local().isoformat(), "numbers": numbers, "persona": persona,
-        "attempts": prank.clamp_attempts(body.get("attempts") or 3),
-        "cooldown": prank.clamp_cooldown(body.get("cooldown") or 60),
+        "attempts": prank.clamp_attempts(body.get("attempts") or 100),
+        "cooldown": prank.clamp_cooldown(body.get("cooldown") or 0),
         "max_lines": max(1, min(int(body.get("max_lines") or 2), 3)),
         "status": "running", "events": [],
     }

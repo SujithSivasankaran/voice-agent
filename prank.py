@@ -21,8 +21,8 @@ from typing import Callable, Optional
 
 from livekit import api
 
-MAX_ATTEMPTS = 10               # safety ceiling: a prank can never place more than this many calls per number
-MIN_COOLDOWN = 20               # safety floor: calls to one number are always spaced by at least this (seconds)
+MAX_ATTEMPTS = 100               # safety ceiling: a prank can never place more than this many calls per number
+MIN_COOLDOWN = 0               # safety floor: calls to one number are always spaced by at least this (seconds)
 PER_ATTEMPT_TIMEOUT = 180       # safety net: longest we wait for one call's room to finish
 PERSONAS = ("fridge", "pizza", "nap", "time")
 
@@ -54,7 +54,7 @@ def collect_numbers(values) -> list:
         for piece in str(v or "").replace("\n", ",").split(","):
             p = piece.strip()
             key = _digits(p)
-            if p and key and key not in seen:
+            if p and key:
                 seen.add(key)
                 out.append(p)
     return out
