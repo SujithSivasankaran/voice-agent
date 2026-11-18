@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Prank Caller</title>
+<style>
+  :root {
+    --bg:#0f1117; --card:#171a23; --card2:#1e222e; --border:#2a2f3c; --text:#e8eaf0;
+    --muted:#9aa2b4; --primary:#7c5cff; --primary-h:#6b4bf0; --ok:#12b76a; --err:#f04438; --amber:#f79009;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6fa; --card:#fff; --card2:#f0f1f6; --border:#e3e5ec; --text:#1a1d27; --muted:#667085; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:720px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px 18px 20px; margin-bottom:16px; }
+  label { display:block; font-size:13px; font-weight:600; margin:14px 0 6px; }
+  label .hint { font-weight:400; color:var(--muted); }
+  input, select, textarea { width:100%; background:var(--card2); border:1px solid var(--border); border-radius:9px; color:var(--text); padding:10px 12px; font:inherit; outline:none; }
+  textarea { min-height:84px; resize:vertical; }
+  input:focus, select:focus, textarea:focus { border-color:var(--primary); }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:120px; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:6px; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; background:var(--primary); color:#fff; border:none; border-radius:10px; padding:12px 18px; font:inherit; font-weight:600; cursor:pointer; margin-top:18px; width:100%; }
+  .btn:hover { background:var(--primary-h); }
+  .btn:disabled { opacity:.6; cursor:not-allowed; }
+  .warn { background:color-mix(in srgb, var(--amber) 14%, transparent); border:1px solid color-mix(in srgb, var(--amber) 40%, transparent); color:var(--text); font-size:13px; border-radius:10px; padding:11px 13px; margin-bottom:16px; }
+  .jobs h2 { font-size:15px; margin:4px 0 10px; }
+  .job { border:1px solid var(--border); border-radius:11px; padding:12px 14px; margin-bottom:10px; background:var(--card); }
+  .job-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px; }
+  .nums { font-weight:600; word-break:break-word; }
+  .pill { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:20px; white-space:nowrap; }
+  .pill.running { background:color-mix(in srgb, var(--primary) 18%, transparent); color:var(--primary); }
+  .pill.done { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
+  .pill.error { background:color-mix(in srgb, var(--err) 16%, transparent); color:var(--err); }
+  .events { font-size:12.5px; color:var(--muted); max-height:160px; overflow-y:auto; margin-top:6px; }
+  .events div { padding:2px 0; border-top:1px solid var(--border); }
+  .events div:first-child { border-top:none; }
+  .ev-phone { color:var(--text); font-weight:600; }
+  .empty { color:var(--muted); font-size:13px; }
+  #toast { position:fixed; left:16px; right:16px; bottom:16px; text-align:center; }
+  #toast div { display:inline-block; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:10px 16px; box-shadow:0 8px 24px rgba(0,0,0,.3); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎭 Prank Caller</h1>
+  <p class="sub">A separate bit of fun — not part of the Fitcamp dashboard, and it records nothing.</p>
+
+  <div class="warn">Keep it friendly. Each number is called at most <b>3 times</b> then stops, and the person can always hang up. Only use numbers of people who'll enjoy the joke.</div>
+
+  <div class="card">
+    <label for="numbers">Numbers to call <span class="hint">— one per line, or comma-separated (with country code, e.g. +91…)</span></label>
+    <textarea id="numbers" placeholder="+917373447879&#10;+919812345678"></textarea>
+    <div class="row">
+      <div>
+        <label for="persona">Character</label>
+        <select id="persona">
+          <option value="">Random</option>
+          <option value="fridge">Sentient fridge</option>
+          <option value="pizza">Intergalactic Pizza Council</option>
+          <option value="nap">Napping champion host</option>
+          <option value="time">Confused time traveller</option>
+        </select>
+      </div>
+      <div>
+        <label for="attempts">Tries each <span class="hint">(max 3)</span></label>
+        <select id="attempts"><option>1</option><option>2</option><option selected>3</option></select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="cooldown">Gap between tries <span class="hint">(seconds)</span></label>
+        <input id="cooldown" type="number" min="0" max="600" value="60" />
+      </div>
+      <div>
+        <label for="maxlines">Calls at once <span class="hint">(keep 1 line free)</span></label>
+        <select id="maxlines"><option>1</option><option selected>2</option><option>3</option></select>
+      </div>
+    </div>
+    <button class="btn" id="go" onclick="start()">Start pranking</button>
+  </div>
+
+  <div class="jobs">
+    <h2>Recent pranks</h2>
+    <div id="jobs"><div class="empty">Nothing yet.</div></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toast(m){const t=document.getElementById('toast');t.innerHTML='<div>'+esc(m)+'</div>';setTimeout(()=>t.innerHTML='',3500);}
+
+async function api(path, opts){
+  const r = await fetch(path, {headers:{'Content-Type':'application/json'}, cache:'no-store', ...opts});
+  if (r.status===401){ location.href='/login'; throw new Error('Please sign in'); }
+  if (r.status===403){ throw new Error('Admins only'); }
+  if (!r.ok){ let m; try{ m=(await r.json()).detail; }catch{ m=await r.text(); } throw new Error(m||('Error '+r.status)); }
+  return r.json();
+}
+
+async function start(){
+  const numbers = document.getElementById('numbers').value.trim();
+  if(!numbers){ toast('Enter at least one number'); return; }
+  const body = {
+    numbers,
+    persona: document.getElementById('persona').value,
+    attempts: Number(document.getElementById('attempts').value),
+    cooldown: Number(document.getElementById('cooldown').value),
+    max_lines: Number(document.getElementById('maxlines').value),
+  };
+  const btn = document.getElementById('go'); btn.disabled = true;
+  try {
+    const r = await api('/prank/start', {method:'POST', body:JSON.stringify(body)});
+    toast('Started — calling ' + r.numbers.length + ' number(s)');
+    document.getElementById('numbers').value = '';
+    loadJobs();
+  } catch(e){ toast(e.message); }
+  finally { btn.disabled = false; }
+}
+
+function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(); }catch{ return ''; } }
+
+async function loadJobs(){
+  let jobs; try{ jobs = await api('/prank/jobs'); }catch{ return; }
+  const el = document.getElementById('jobs');
+  if(!jobs.length){ el.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+  el.innerHTML = jobs.map(j => `
+    <div class="job">
+      <div class="job-head">
+        <span class="nums">${esc(j.numbers.join(', '))}</span>
+        <span class="pill ${esc(j.status)}">${esc(j.status)}</span>
+      </div>
+      <div class="note">${esc(j.persona||'random')} · up to ${esc(j.attempts)} each · started ${fmtTime(j.created)}</div>
+      <div class="events">${(j.events||[]).slice().reverse().map(e =>
+        `<div>${e.phone?`<span class="ev-phone">${esc(e.phone)}</span> — `:''}${esc(e.msg)}</div>`).join('') || '<div>starting…</div>'}</div>
+    </div>`).join('');
+}
+
+loadJobs();
+setInterval(loadJobs, 4000);
+</script>
+</body>
+</html>

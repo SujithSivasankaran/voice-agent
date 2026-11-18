@@ -69,7 +69,7 @@ if _allowed_origins:
 # the login endpoints, logout, health check, and the favicon.
 PUBLIC_PATHS = {"/login", "/logout", "/health", "/favicon.ico"}
 # Paths only the admin role may use. Spend figures are also stripped for employees (see _hide_cost).
-ADMIN_ONLY_PREFIXES = ("/users", "/settings", "/logs")
+ADMIN_ONLY_PREFIXES = ("/users", "/settings", "/logs", "/prank")
 
 
 def _is_admin(request: Request) -> bool:
@@ -531,7 +531,90 @@ async def root():
     ui_path = Path(__file__).parent / "ui" / "index.html"
     if ui_path.exists():
         return HTMLResponse(ui_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>T-800</h1><p>ui/index.html not found</p>")
+    return HTMLResponse("<h1>Harry's Fitcamp</h1><p>ui/index.html not found</p>")
+
+
+# ── Prank caller (admin only; a separate hidden page, not the Fitcamp dashboard) ──
+# Writes nothing to the database — prank calls take agent.py's separate _run_prank
+# path. Job status lives only in memory, so it never touches Fitcamp data.
+
+import prank  # noqa: E402
+
+_prank_jobs: dict = {}        # job_id -> {created, numbers, persona, status, events}
+_prank_tasks: set = set()     # strong refs so background pranks aren't garbage-collected
+
+
+@app.get("/prank", response_class=HTMLResponse)
+async def prank_page():
+    page = Path(__file__).parent / "ui" / "prank.html"
+    if page.exists():
+        return HTMLResponse(page.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Prank</h1><p>ui/prank.html not found</p>", status_code=500)
+
+
+async def _run_prank_job(job_id: str) -> None:
+    job = _prank_jobs[job_id]
+    try:
+        lk = prank.livekit_from_env()
+    except RuntimeError as exc:
+        job["status"] = "error"
+        job["events"].append({"at": now_local().isoformat(), "phone": "", "msg": str(exc)})
+        return
+
+    def emit(phone, msg):
+        job["events"].append({"at": now_local().isoformat(), "phone": phone, "msg": msg})
+        job["events"][:] = job["events"][-200:]   # keep the log bounded
+
+    try:
+        await prank.run_prank(
+            lk, job["numbers"], trunk_id=os.environ.get("OUTBOUND_TRUNK_ID", ""),
+            persona=job["persona"], attempts=job["attempts"], cooldown=job["cooldown"],
+            max_lines=job["max_lines"], emit=emit,
+        )
+        job["status"] = "done"
+    except Exception as exc:
+        logger.exception("Prank job %s failed", job_id)
+        job["status"] = "error"
+        emit("", f"stopped with an error: {exc}")
+    finally:
+        try:
+            await lk.aclose()
+        except Exception:
+            pass
+
+
+@app.post("/prank/start")
+async def prank_start(request: Request):
+    body = await request.json()
+    numbers = prank.collect_numbers(body.get("numbers") or body.get("phone") or [])
+    if not numbers:
+        raise HTTPException(400, "Enter at least one phone number.")
+    if len(numbers) > 5:
+        raise HTTPException(400, "Up to 5 numbers at a time.")
+    if not os.environ.get("OUTBOUND_TRUNK_ID"):
+        raise HTTPException(503, "Calling isn't configured on the server (no outbound trunk).")
+    persona = (body.get("persona") or "").strip().lower()
+    if persona and persona not in prank.PERSONAS:
+        persona = ""
+    job_id = uuid.uuid4().hex[:8]
+    _prank_jobs[job_id] = {
+        "id": job_id, "created": now_local().isoformat(), "numbers": numbers, "persona": persona,
+        "attempts": max(1, min(int(body.get("attempts") or 3), prank.HARD_CAP_ATTEMPTS)),
+        "cooldown": max(0, min(int(body.get("cooldown") or 60), 600)),
+        "max_lines": max(1, min(int(body.get("max_lines") or 2), 3)),
+        "status": "running", "events": [],
+    }
+    task = asyncio.create_task(_run_prank_job(job_id))
+    _prank_tasks.add(task)
+    task.add_done_callback(_prank_tasks.discard)
+    logger.info("Prank job %s started for %d number(s) by %s", job_id, len(numbers), request.state.user)
+    return {"id": job_id, "numbers": numbers, "status": "running"}
+
+
+@app.get("/prank/jobs")
+async def prank_jobs():
+    jobs = sorted(_prank_jobs.values(), key=lambda j: j["created"], reverse=True)[:10]
+    return [{**j, "events": j["events"][-40:]} for j in jobs]
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
