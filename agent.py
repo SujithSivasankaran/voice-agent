@@ -260,6 +260,117 @@ def _build_session(
     return AgentSession(llm=RealtimeClass(**realtime_kwargs))
 
 
+# ── Standalone prank call (separate from Fitcamp; writes NOTHING to the DB) ────
+
+async def _run_prank(ctx: "agents.JobContext", meta: dict, phone_number: str, trunk_id: str) -> None:
+    """A self-contained fun prank call: dial the number, run a short silly scripted
+    call, then hang up. It never writes to the database — no call_logs, trials or any
+    Fitcamp data. The up-to-3 retry + cooldown lives in prank_runner.py; this handles
+    exactly one call. Only ever reached when a job is explicitly flagged prank=true."""
+    from prank_script import build_prank_prompt, PRANK_OPENING
+
+    logger.info("PRANK job — room: %s phone: %s", ctx.room.name, phone_number)
+    try:
+        await ctx.connect()
+    except Exception:
+        logger.exception("Prank: could not connect room")
+        return
+    if not phone_number or not trunk_id:
+        logger.error("Prank: missing phone number or trunk — aborting")
+        try:
+            await ctx.room.disconnect()
+        except Exception:
+            pass
+        return
+
+    call_ended = asyncio.Event()
+
+    @ctx.room.on("participant_disconnected")
+    def _on_pd(participant):
+        if _is_sip_participant(participant):
+            call_ended.set()
+
+    @ctx.room.on("disconnected")
+    def _on_rd(*_args):
+        call_ended.set()
+
+    try:
+        session = _build_session([], build_prank_prompt(meta.get("persona")))
+        agent = Agent(instructions="You are a fun prank character. Follow your system prompt.")
+    except Exception:
+        logger.exception("Prank: session build failed")
+        try:
+            await ctx.room.disconnect()
+        except Exception:
+            pass
+        return
+
+    def _start_session():
+        return session.start(
+            agent=agent, room=ctx.room,
+            room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()),
+        )
+
+    async def _cleanup(task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+        try:
+            await session.aclose()
+        except Exception:
+            pass
+        try:
+            await ctx.room.disconnect()
+        except Exception:
+            pass
+
+    warm_task = asyncio.create_task(_start_session())
+    try:
+        await ctx.api.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                room_name=ctx.room.name, sip_trunk_id=trunk_id, sip_call_to=phone_number,
+                participant_identity=f"sip_{phone_number}", participant_name="Surprise",
+                wait_until_answered=True,
+            )
+        )
+    except Exception as exc:
+        # Declined / busy / no answer — just end this attempt; the runner retries (up to 3).
+        logger.info("Prank: dial did not connect (%s)", exc)
+        await _cleanup(warm_task)
+        return
+
+    if call_ended.is_set():
+        await _cleanup(warm_task)
+        return
+
+    try:
+        await warm_task
+        try:
+            session.generate_reply(instructions=PRANK_OPENING)
+        except Exception as exc:
+            logger.warning("Prank: opening line failed (%s)", exc)
+        max_seconds = max(20, int(os.environ.get("PRANK_MAX_CALL_SECONDS", "75")))
+        try:
+            await asyncio.wait_for(call_ended.wait(), timeout=max_seconds)
+        except asyncio.TimeoutError:
+            logger.info("Prank: reached %ss cap, hanging up", max_seconds)
+    except Exception:
+        logger.exception("Prank: session failed")
+    finally:
+        try:
+            await session.aclose()
+        except Exception:
+            pass
+        try:
+            await ctx.room.disconnect()
+        except Exception:
+            pass
+    logger.info("Prank call finished — %s", phone_number)
+
+
 # ── Main entrypoint ───────────────────────────────────────────────────────────
 
 async def entrypoint(ctx: agents.JobContext):
@@ -286,6 +397,13 @@ async def entrypoint(ctx: agents.JobContext):
     lead_name    = meta.get("lead_name", "there")
     missed_date  = meta.get("missed_date", "")
     trunk_id     = meta.get("trunk_id") or os.environ.get("OUTBOUND_TRUNK_ID", "")
+
+    # A prank job (set only by prank_runner.py) takes a fully separate path that
+    # writes nothing to the database. Normal Fitcamp calls never set this flag.
+    if meta.get("prank"):
+        await _run_prank(ctx, meta, phone_number, trunk_id)
+        return
+
     # No outbound number means the caller dialled us (routed by a LiveKit dispatch rule).
     is_inbound   = not phone_number
     campaign     = INBOUND if is_inbound else campaign_or_default(meta.get("campaign"))
