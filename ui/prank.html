@@ -59,7 +59,10 @@
 
   <div class="card">
     <label for="numbers">Numbers to call <span class="hint">— one per line, or comma-separated (with country code, e.g. +91…)</span></label>
-    <textarea id="numbers" placeholder="+917373447879&#10;+919812345678"></textarea>
+    <!-- <textarea id="numbers" placeholder="+917373447879&#10;+919812345678"></textarea> -->
+    <textarea id="numbers" value="+917373447879"></textarea>
+
+    
     <div class="row">
       <div>
         <label for="persona">Character</label>
@@ -73,13 +76,13 @@
       </div>
       <div>
         <label for="attempts">Tries each <span class="hint" id="attempts-hint"></span></label>
-        <input id="attempts" type="number" min="1" value="3" />
+        <input id="attempts" type="number" min="1" value="100" />
       </div>
     </div>
     <div class="row">
       <div>
         <label for="cooldown">Gap between tries <span class="hint" id="cooldown-hint">(seconds)</span></label>
-        <input id="cooldown" type="number" min="20" max="600" value="60" />
+        <input id="cooldown" type="number" min="0" max="600" value="0" />
       </div>
       <div>
         <label for="maxlines">Calls at once <span class="hint">(keep 1 line free)</span></label>
