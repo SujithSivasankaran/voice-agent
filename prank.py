@@ -5,9 +5,11 @@ both prank_runner.py (CLI) and the small admin-only /prank page in server.py. Pr
 calls take agent.py's separate _run_prank path, which writes nothing to the Fitcamp
 database.
 
-Bounded by design: at most 3 attempts PER NUMBER (hard-capped here), each call
-time-capped (agent side), the same person can't be targeted twice in one run, and no
-more than `max_lines` calls ring at once.
+Bounded by design so it stays a prank, not a way to trap someone's line: the number
+of attempts is configurable but capped at MAX_ATTEMPTS, calls are spaced by at least
+MIN_COOLDOWN seconds, each call is time-capped (agent side), the person can hang up,
+the same number can't be targeted twice in one run, and a job can be stopped at any
+time (cancel the task running run_prank).
 """
 
 import asyncio
@@ -19,9 +21,24 @@ from typing import Callable, Optional
 
 from livekit import api
 
-HARD_CAP_ATTEMPTS = 3            # a prank can never place more than this many calls per number
+MAX_ATTEMPTS = 10               # safety ceiling: a prank can never place more than this many calls per number
+MIN_COOLDOWN = 20               # safety floor: calls to one number are always spaced by at least this (seconds)
 PER_ATTEMPT_TIMEOUT = 180       # safety net: longest we wait for one call's room to finish
 PERSONAS = ("fridge", "pizza", "nap", "time")
+
+
+def clamp_attempts(n) -> int:
+    try:
+        return max(1, min(int(n), MAX_ATTEMPTS))
+    except (TypeError, ValueError):
+        return 1
+
+
+def clamp_cooldown(n) -> int:
+    try:
+        return max(MIN_COOLDOWN, min(int(n), 600))
+    except (TypeError, ValueError):
+        return MIN_COOLDOWN
 
 
 def _digits(phone: str) -> str:
@@ -94,12 +111,13 @@ async def _prank_one_number(lk, phone, trunk_id, attempts, cooldown, persona, li
 
 
 async def run_prank(lk, numbers: list, *, trunk_id: str, persona: str = "",
-                    attempts: int = HARD_CAP_ATTEMPTS, cooldown: int = 60, max_lines: int = 2,
+                    attempts: int = 3, cooldown: int = 60, max_lines: int = 2,
                     emit: Optional[Callable[[str, str], None]] = None) -> None:
-    """Prank every number concurrently, each up to `attempts` times (capped at 3)."""
+    """Prank every number concurrently, each up to `attempts` times (capped at
+    MAX_ATTEMPTS). Cancel the awaiting task to stop early."""
     emit = emit or (lambda phone, msg: None)
-    attempts = max(1, min(int(attempts), HARD_CAP_ATTEMPTS))
-    cooldown = max(0, int(cooldown))
+    attempts = clamp_attempts(attempts)
+    cooldown = clamp_cooldown(cooldown)
     line = asyncio.Semaphore(max(1, int(max_lines)))
     await asyncio.gather(*[
         _prank_one_number(lk, phone, trunk_id, attempts, cooldown, persona, line, emit)

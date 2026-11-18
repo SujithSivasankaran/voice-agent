@@ -25,10 +25,10 @@ import prank  # noqa: E402
 
 
 async def main() -> None:
-    ap = argparse.ArgumentParser(description="Fun prank caller (max 3 attempts per number).")
+    ap = argparse.ArgumentParser(description="Fun prank caller.")
     ap.add_argument("--phone", action="append", required=True,
                     help="Number to call (repeat the flag, or comma-separate, for several)")
-    ap.add_argument("--attempts", type=int, default=prank.HARD_CAP_ATTEMPTS, help="Tries per number (max 3)")
+    ap.add_argument("--attempts", type=int, default=3, help=f"Tries per number (max {prank.MAX_ATTEMPTS})")
     ap.add_argument("--cooldown", type=int, default=60, help="Seconds between a number's attempts")
     ap.add_argument("--persona", default="", help="fridge | pizza | nap | time (blank = random)")
     ap.add_argument("--max-lines", type=int, default=2,
@@ -45,7 +45,7 @@ async def main() -> None:
     def emit(phone, msg):
         print(f"{phone}: {msg}")
 
-    print(f"Prank: {len(numbers)} number(s), up to {min(args.attempts, prank.HARD_CAP_ATTEMPTS)} each. Ctrl-C to stop.")
+    print(f"Prank: {len(numbers)} number(s), up to {prank.clamp_attempts(args.attempts)} each. Ctrl-C to stop.")
     try:
         lk = prank.livekit_from_env()
     except RuntimeError as exc:

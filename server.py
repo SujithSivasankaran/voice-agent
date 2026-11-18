@@ -541,7 +541,7 @@ async def root():
 import prank  # noqa: E402
 
 _prank_jobs: dict = {}        # job_id -> {created, numbers, persona, status, events}
-_prank_tasks: set = set()     # strong refs so background pranks aren't garbage-collected
+_prank_tasks: dict = {}       # job_id -> asyncio.Task (so a job can be stopped / kill switch)
 
 
 @app.get("/prank", response_class=HTMLResponse)
@@ -572,6 +572,10 @@ async def _run_prank_job(job_id: str) -> None:
             max_lines=job["max_lines"], emit=emit,
         )
         job["status"] = "done"
+    except asyncio.CancelledError:
+        job["status"] = "stopped"
+        emit("", "stopped")
+        raise
     except Exception as exc:
         logger.exception("Prank job %s failed", job_id)
         job["status"] = "error"
@@ -599,22 +603,41 @@ async def prank_start(request: Request):
     job_id = uuid.uuid4().hex[:8]
     _prank_jobs[job_id] = {
         "id": job_id, "created": now_local().isoformat(), "numbers": numbers, "persona": persona,
-        "attempts": max(1, min(int(body.get("attempts") or 3), prank.HARD_CAP_ATTEMPTS)),
-        "cooldown": max(0, min(int(body.get("cooldown") or 60), 600)),
+        "attempts": prank.clamp_attempts(body.get("attempts") or 3),
+        "cooldown": prank.clamp_cooldown(body.get("cooldown") or 60),
         "max_lines": max(1, min(int(body.get("max_lines") or 2), 3)),
         "status": "running", "events": [],
     }
     task = asyncio.create_task(_run_prank_job(job_id))
-    _prank_tasks.add(task)
-    task.add_done_callback(_prank_tasks.discard)
+    _prank_tasks[job_id] = task
+    task.add_done_callback(lambda _t, jid=job_id: _prank_tasks.pop(jid, None))
     logger.info("Prank job %s started for %d number(s) by %s", job_id, len(numbers), request.state.user)
     return {"id": job_id, "numbers": numbers, "status": "running"}
+
+
+@app.post("/prank/{job_id}/stop")
+async def prank_stop(job_id: str):
+    """Kill switch — stop a running prank immediately. Calls already connected run
+    out their short time cap on the agent; no new calls are placed."""
+    job = _prank_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such prank.")
+    task = _prank_tasks.get(job_id)
+    if task and not task.done():
+        task.cancel()
+        return {"status": "stopping"}
+    return {"status": job.get("status", "done")}
+
+
+@app.get("/prank/caps")
+async def prank_caps():
+    return {"max_attempts": prank.MAX_ATTEMPTS, "min_cooldown": prank.MIN_COOLDOWN, "personas": list(prank.PERSONAS)}
 
 
 @app.get("/prank/jobs")
 async def prank_jobs():
     jobs = sorted(_prank_jobs.values(), key=lambda j: j["created"], reverse=True)[:10]
-    return [{**j, "events": j["events"][-40:]} for j in jobs]
+    return [{**j, "events": j["events"][-40:], "stoppable": j["id"] in _prank_tasks} for j in jobs]
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

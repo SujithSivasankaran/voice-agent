@@ -38,6 +38,9 @@
   .pill.running { background:color-mix(in srgb, var(--primary) 18%, transparent); color:var(--primary); }
   .pill.done { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
   .pill.error { background:color-mix(in srgb, var(--err) 16%, transparent); color:var(--err); }
+  .pill.stopped { background:color-mix(in srgb, var(--muted) 20%, transparent); color:var(--muted); }
+  .stop-btn { background:none; border:1px solid var(--err); color:var(--err); border-radius:8px; padding:4px 12px; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; }
+  .stop-btn:hover { background:color-mix(in srgb, var(--err) 12%, transparent); }
   .events { font-size:12.5px; color:var(--muted); max-height:160px; overflow-y:auto; margin-top:6px; }
   .events div { padding:2px 0; border-top:1px solid var(--border); }
   .events div:first-child { border-top:none; }
@@ -52,7 +55,7 @@
   <h1>🎭 Prank Caller</h1>
   <p class="sub">A separate bit of fun — not part of the Fitcamp dashboard, and it records nothing.</p>
 
-  <div class="warn">Keep it friendly. Each number is called at most <b>3 times</b> then stops, and the person can always hang up. Only use numbers of people who'll enjoy the joke.</div>
+  <div class="warn">Keep it friendly. Each number is called the number of times you set (up to a safe limit), spaced out, then stops — and the person can always hang up. Use the <b>Stop</b> button to kill a run at any time. Only use numbers of people who'll enjoy the joke.</div>
 
   <div class="card">
     <label for="numbers">Numbers to call <span class="hint">— one per line, or comma-separated (with country code, e.g. +91…)</span></label>
@@ -69,14 +72,14 @@
         </select>
       </div>
       <div>
-        <label for="attempts">Tries each <span class="hint">(max 3)</span></label>
-        <select id="attempts"><option>1</option><option>2</option><option selected>3</option></select>
+        <label for="attempts">Tries each <span class="hint" id="attempts-hint"></span></label>
+        <input id="attempts" type="number" min="1" value="3" />
       </div>
     </div>
     <div class="row">
       <div>
-        <label for="cooldown">Gap between tries <span class="hint">(seconds)</span></label>
-        <input id="cooldown" type="number" min="0" max="600" value="60" />
+        <label for="cooldown">Gap between tries <span class="hint" id="cooldown-hint">(seconds)</span></label>
+        <input id="cooldown" type="number" min="20" max="600" value="60" />
       </div>
       <div>
         <label for="maxlines">Calls at once <span class="hint">(keep 1 line free)</span></label>
@@ -103,6 +106,23 @@ async function api(path, opts){
   if (r.status===403){ throw new Error('Admins only'); }
   if (!r.ok){ let m; try{ m=(await r.json()).detail; }catch{ m=await r.text(); } throw new Error(m||('Error '+r.status)); }
   return r.json();
+}
+
+let CAPS = { max_attempts: 10, min_cooldown: 20 };
+async function loadCaps(){
+  try { CAPS = await api('/prank/caps'); } catch { return; }
+  const a = document.getElementById('attempts');
+  a.max = CAPS.max_attempts;
+  if (Number(a.value) > CAPS.max_attempts) a.value = CAPS.max_attempts;
+  document.getElementById('attempts-hint').textContent = `(1–${CAPS.max_attempts})`;
+  const cd = document.getElementById('cooldown'); cd.min = CAPS.min_cooldown;
+  if (Number(cd.value) < CAPS.min_cooldown) cd.value = CAPS.min_cooldown;
+  document.getElementById('cooldown-hint').textContent = `(min ${CAPS.min_cooldown}s)`;
+}
+
+async function stopJob(id){
+  try { await api('/prank/' + id + '/stop', {method:'POST'}); toast('Stopping…'); loadJobs(); }
+  catch(e){ toast(e.message); }
 }
 
 async function start(){
@@ -135,7 +155,10 @@ async function loadJobs(){
     <div class="job">
       <div class="job-head">
         <span class="nums">${esc(j.numbers.join(', '))}</span>
-        <span class="pill ${esc(j.status)}">${esc(j.status)}</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          ${j.stoppable ? `<button class="stop-btn" onclick="stopJob('${esc(j.id)}')">Stop</button>` : ''}
+          <span class="pill ${esc(j.status)}">${esc(j.status)}</span>
+        </span>
       </div>
       <div class="note">${esc(j.persona||'random')} · up to ${esc(j.attempts)} each · started ${fmtTime(j.created)}</div>
       <div class="events">${(j.events||[]).slice().reverse().map(e =>
@@ -143,6 +166,7 @@ async function loadJobs(){
     </div>`).join('');
 }
 
+loadCaps();
 loadJobs();
 setInterval(loadJobs, 4000);
 </script>
