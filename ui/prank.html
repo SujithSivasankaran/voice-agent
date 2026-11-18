@@ -108,7 +108,7 @@ async function api(path, opts){
   return r.json();
 }
 
-let CAPS = { max_attempts: 10, min_cooldown: 20 };
+let CAPS = { max_attempts: 100, min_cooldown: 0 };
 async function loadCaps(){
   try { CAPS = await api('/prank/caps'); } catch { return; }
   const a = document.getElementById('attempts');
